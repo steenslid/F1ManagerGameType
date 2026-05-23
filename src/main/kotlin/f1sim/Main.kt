@@ -3,6 +3,7 @@ package f1sim
 import f1sim.config.AppConfig
 import f1sim.db.Database
 import f1sim.db.Migrations
+import f1sim.game.GameService
 import f1sim.http.Server
 import f1sim.save.SaveService
 import f1sim.seed.SeedLoader
@@ -24,7 +25,8 @@ fun main() {
 
     val seedLoader = SeedLoader()
     val saveService = SaveService(db, config, seedLoader)
-    val server = Server(config, db, saveService)
+    val gameService = GameService(db)
+    val server = Server(config, db, saveService, gameService)
     server.start()
 
     log.info("F1 Sim ready.")

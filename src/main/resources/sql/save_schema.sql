@@ -30,7 +30,9 @@ CREATE TABLE game (
 
     CONSTRAINT game_difficulty_valid CHECK (difficulty IN ('EASY','NORMAL','HARD','BRUTAL')),
     CONSTRAINT game_phase_valid CHECK (current_phase IN (
-        'OFF_SEASON','PRE_SEASON','RACE_WEEKEND','BETWEEN_ROUNDS','END_OF_SEASON'
+        'OFF_SEASON','PRE_SEASON',
+        'PRACTICE','QUALIFYING','SPRINT_QUALIFYING','SPRINT','RACE','POST_RACE',
+        'BETWEEN_ROUNDS','END_OF_SEASON'
     ))
 );
 
@@ -55,7 +57,6 @@ CREATE TABLE regulation_eras (
 
 -- ============================================================================
 -- Reference: tracks
--- Per-track demand profile mirrors the car performance characteristic axes.
 -- ============================================================================
 
 CREATE TABLE tracks (
@@ -65,7 +66,6 @@ CREATE TABLE tracks (
     length_km                       NUMERIC(6,3) NOT NULL,
     type                            TEXT         NOT NULL,
 
-    -- Demand weights on car performance axes (0..1)
     demand_top_speed                NUMERIC(3,2) NOT NULL,
     demand_acceleration             NUMERIC(3,2) NOT NULL,
     demand_low_speed_cornering      NUMERIC(3,2) NOT NULL,
@@ -75,11 +75,9 @@ CREATE TABLE tracks (
     demand_tyre_wear                NUMERIC(3,2) NOT NULL,
     demand_cooling                  NUMERIC(3,2) NOT NULL,
 
-    -- Race operations
     pit_lane_loss_seconds           NUMERIC(4,2) NOT NULL,
     overtake_difficulty             NUMERIC(3,2) NOT NULL,
 
-    -- Climate baseline
     rain_probability_baseline       NUMERIC(3,2) NOT NULL,
     temperature_min_c               NUMERIC(4,1) NOT NULL,
     temperature_max_c               NUMERIC(4,1) NOT NULL,
@@ -120,12 +118,10 @@ CREATE TABLE sponsors (
     industry                        TEXT         NOT NULL,
     prestige                        INT          NOT NULL,
 
-    -- Preferences (0..1)
     performance_sensitivity         NUMERIC(3,2) NOT NULL,
     risk_tolerance                  NUMERIC(3,2) NOT NULL,
     prestige_preference             NUMERIC(3,2) NOT NULL,
 
-    -- Annual deal value bounds
     budget_min                      BIGINT       NOT NULL,
     budget_max                      BIGINT       NOT NULL,
 
@@ -134,9 +130,7 @@ CREATE TABLE sponsors (
 );
 
 -- ============================================================================
--- Engine suppliers
--- Has a nullable FK to teams.works_team_id, added via ALTER below
--- to break the circular dependency with teams.
+-- Engine suppliers (FK to teams added after teams exists)
 -- ============================================================================
 
 CREATE TABLE engine_suppliers (
@@ -145,7 +139,7 @@ CREATE TABLE engine_suppliers (
     country                         TEXT         NOT NULL,
     entered_year                    INT          NOT NULL,
     exited_year                     INT,
-    works_team_id                   TEXT,        -- FK added after teams exists
+    works_team_id                   TEXT,
     is_custom_supplier              BOOLEAN      NOT NULL DEFAULT FALSE,
 
     CONSTRAINT suppliers_years_valid CHECK (exited_year IS NULL OR exited_year >= entered_year)
@@ -153,8 +147,6 @@ CREATE TABLE engine_suppliers (
 
 -- ============================================================================
 -- Teams
--- The most state-heavy entity: AI personality, finances, board posture, cached
--- season state all live here.
 -- ============================================================================
 
 CREATE TABLE teams (
@@ -166,7 +158,6 @@ CREATE TABLE teams (
     prestige                        INT          NOT NULL,
     is_custom_team                  BOOLEAN      NOT NULL DEFAULT FALSE,
 
-    -- Finance (per-season state)
     cash_reserves                   BIGINT       NOT NULL DEFAULT 0,
     current_year_income             BIGINT       NOT NULL DEFAULT 0,
     current_year_expenses           BIGINT       NOT NULL DEFAULT 0,
@@ -175,22 +166,18 @@ CREATE TABLE teams (
     academy_investment              BIGINT       NOT NULL DEFAULT 0,
     cap_compliance_status           TEXT         NOT NULL DEFAULT 'COMPLIANT',
 
-    -- Capabilities
     regulation_understanding        NUMERIC(3,2) NOT NULL DEFAULT 0.50,
     pit_crew_rating                 INT          NOT NULL DEFAULT 50,
 
-    -- AI personality vector (0..1)
     ai_aggression                   NUMERIC(3,2) NOT NULL DEFAULT 0.50,
     ai_ambition                     NUMERIC(3,2) NOT NULL DEFAULT 0.50,
     ai_loyalty                      NUMERIC(3,2) NOT NULL DEFAULT 0.50,
     ai_frugality                    NUMERIC(3,2) NOT NULL DEFAULT 0.50,
     ai_development_focus            NUMERIC(3,2) NOT NULL DEFAULT 0.50,
 
-    -- Board calibration
     board_ambition                  NUMERIC(3,2) NOT NULL DEFAULT 0.50,
     board_realism                   NUMERIC(3,2) NOT NULL DEFAULT 0.50,
 
-    -- Cached season state
     season_points                   INT          NOT NULL DEFAULT 0,
 
     CONSTRAINT teams_series_valid CHECK (series IN ('F1','F2','F3')),
@@ -199,18 +186,16 @@ CREATE TABLE teams (
     CONSTRAINT teams_pit_crew_range CHECK (pit_crew_rating BETWEEN 0 AND 100)
 );
 
--- Close the circular FK now that teams exists.
 ALTER TABLE engine_suppliers
     ADD CONSTRAINT engine_suppliers_works_team_fk
     FOREIGN KEY (works_team_id) REFERENCES teams(id) ON DELETE SET NULL;
 
--- Helpful index for the common "find teams in series X" query.
 CREATE INDEX teams_series_idx ON teams (series);
 
 -- ============================================================================
 -- Drivers
--- App-level constraint (not in DB): if current_racing_team_id refers to an F1
--- team, reserve_for_team_id MUST be null. Enforced by SaveService writes.
+-- App-level constraint: if current_racing_team_id is an F1 team,
+-- reserve_for_team_id MUST be null. Enforced by SaveService writes.
 -- ============================================================================
 
 CREATE TABLE drivers (
@@ -219,22 +204,18 @@ CREATE TABLE drivers (
     nationality                     TEXT         NOT NULL,
     current_age                     INT          NOT NULL,
 
-    -- Affiliation
     current_racing_team_id          TEXT         REFERENCES teams(id) ON DELETE SET NULL,
     reserve_for_team_id             TEXT         REFERENCES teams(id) ON DELETE SET NULL,
     academy_team_id                 TEXT         REFERENCES teams(id) ON DELETE SET NULL,
     retired                         BOOLEAN      NOT NULL DEFAULT FALSE,
 
-    -- Contract
     current_salary                  BIGINT       NOT NULL DEFAULT 0,
     contract_expires_year           INT,
     contract_expires_round          INT,
 
-    -- Development & morale
     development_pool                INT          NOT NULL DEFAULT 0,
     morale                          INT          NOT NULL DEFAULT 50,
 
-    -- Composite stats (0..100)
     stat_pace                       INT          NOT NULL,
     stat_qualifying                 INT          NOT NULL,
     stat_overtaking                 INT          NOT NULL,
@@ -245,7 +226,6 @@ CREATE TABLE drivers (
     stat_wet_skill                  INT          NOT NULL,
     stat_feedback_quality           INT          NOT NULL,
 
-    -- Hidden traits — generated at creation, never shown directly
     trait_peak_age                  INT          NOT NULL,
     trait_decline_rate              NUMERIC(4,3) NOT NULL,
     trait_retirement_threshold      NUMERIC(3,2) NOT NULL,
@@ -272,7 +252,6 @@ CREATE INDEX drivers_academy_team_idx ON drivers (academy_team_id);
 
 -- ============================================================================
 -- Personnel
--- Skills are kept as flat columns; the active role picks which is "primary".
 -- ============================================================================
 
 CREATE TABLE personnel (
@@ -290,14 +269,12 @@ CREATE TABLE personnel (
 
     development_pool                INT          NOT NULL DEFAULT 0,
 
-    -- Skill ratings (0..100). The active role determines which is primary.
-    skill_leadership                INT          NOT NULL,  -- PRINCIPAL
-    skill_design                    INT          NOT NULL,  -- TECHNICAL_DIRECTOR
-    skill_strategy                  INT          NOT NULL,  -- CHIEF_STRATEGIST
-    skill_crew_management           INT          NOT NULL,  -- CREW_CHIEF
-    skill_driver_management         INT          NOT NULL,  -- RACE_ENGINEER
+    skill_leadership                INT          NOT NULL,
+    skill_design                    INT          NOT NULL,
+    skill_strategy                  INT          NOT NULL,
+    skill_crew_management           INT          NOT NULL,
+    skill_driver_management         INT          NOT NULL,
 
-    -- Hidden traits
     trait_peak_age                  INT          NOT NULL,
     trait_decline_rate              NUMERIC(4,3) NOT NULL,
     trait_loyalty                   NUMERIC(3,2) NOT NULL,
@@ -316,9 +293,7 @@ CREATE TABLE personnel (
 CREATE INDEX personnel_team_idx ON personnel (current_team_id);
 
 -- ============================================================================
--- Power-unit versions: one row per supplier per Mk
--- Old Mks stay around as history; the "current" PU for a supplier is the row
--- with the highest mk_version (no extra current-pointer table needed).
+-- Power-unit versions
 -- ============================================================================
 
 CREATE TABLE pu_versions (
@@ -327,17 +302,14 @@ CREATE TABLE pu_versions (
     mk_version                      INT          NOT NULL,
     introduced_year                 INT          NOT NULL,
 
-    -- ICE (internal combustion)
     ice_top_speed                   INT          NOT NULL,
     ice_fuel_efficiency             INT          NOT NULL,
     ice_weight                      INT          NOT NULL,
 
-    -- ERS
     ers_deployment_power            INT          NOT NULL,
     ers_recovery_rate               INT          NOT NULL,
     ers_deployment_efficiency       INT          NOT NULL,
 
-    -- Shared
     reliability                     INT          NOT NULL,
     cooling_requirement             INT          NOT NULL,
 

@@ -2,6 +2,7 @@ package f1sim.http
 
 import f1sim.config.AppConfig
 import f1sim.db.Database
+import f1sim.game.GameService
 import f1sim.http.routes.DriverRoutes
 import f1sim.http.routes.GameRoutes
 import f1sim.http.routes.PowerUnitRoutes
@@ -20,6 +21,7 @@ class Server(
     private val config: AppConfig,
     private val db: Database,
     private val saveService: SaveService,
+    private val gameService: GameService,
 ) {
     private val log = LoggerFactory.getLogger(Server::class.java)
     private lateinit var app: Javalin
@@ -34,7 +36,7 @@ class Server(
         }
 
         SaveRoutes(saveService).register(app)
-        GameRoutes(db).register(app)
+        GameRoutes(gameService).register(app)
         TeamRoutes(db).register(app)
         DriverRoutes(db).register(app)
         TrackRoutes(db).register(app)
