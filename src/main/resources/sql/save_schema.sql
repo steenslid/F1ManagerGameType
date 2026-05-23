@@ -208,9 +208,14 @@ CREATE TABLE teams (
     CONSTRAINT teams_pit_crew_range CHECK (pit_crew_rating BETWEEN 0 AND 100)
 );
 
+-- Deferred FKs that point at teams.
 ALTER TABLE engine_suppliers
     ADD CONSTRAINT engine_suppliers_works_team_fk
     FOREIGN KEY (works_team_id) REFERENCES teams(id) ON DELETE SET NULL;
+
+ALTER TABLE game
+    ADD CONSTRAINT game_player_team_fk
+    FOREIGN KEY (player_team_id) REFERENCES teams(id) ON DELETE SET NULL;
 
 CREATE INDEX teams_series_idx ON teams (series);
 

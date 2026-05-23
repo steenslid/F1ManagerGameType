@@ -7,7 +7,11 @@ const actions = ref(null)
 const error = ref(null)
 const loading = ref(false)
 const advanceError = ref(null)
-const transitions = ref([])  // log of recent advances, most recent first
+const transitions = ref([])
+
+const teamsForPick = ref([])
+const teamPick = ref('')
+const teamPickError = ref(null)
 
 async function refresh() {
   loading.value = true
@@ -16,12 +20,36 @@ async function refresh() {
     const [s, a] = await Promise.all([api.getGameState(), api.getActions()])
     state.value = s.data
     actions.value = a.data
+    if (state.value && !state.value.playerTeam) {
+      await loadTeamsForPick()
+    }
   } catch (e) {
     error.value = e.message
     state.value = null
     actions.value = null
   } finally {
     loading.value = false
+  }
+}
+
+async function loadTeamsForPick() {
+  try {
+    const res = await api.listTeams({ series: 'F1' })
+    teamsForPick.value = res.data
+  } catch {
+    // ignore — picker may show empty if a save isn't loaded
+  }
+}
+
+async function selectTeam() {
+  if (!teamPick.value) return
+  teamPickError.value = null
+  try {
+    await api.selectTeam(teamPick.value)
+    teamPick.value = ''
+    await refresh()
+  } catch (e) {
+    teamPickError.value = e.message
   }
 }
 
@@ -59,11 +87,33 @@ onMounted(refresh)
           <tr><th>Save</th><td>{{ state.saveName }}</td></tr>
           <tr><th>Manager</th><td>{{ state.managerName }}</td></tr>
           <tr><th>Difficulty</th><td>{{ state.difficulty }}</td></tr>
+          <tr>
+            <th>Player team</th>
+            <td>
+              <span v-if="state.playerTeam">{{ state.playerTeam.name }}</span>
+              <span v-else class="muted">(none selected)</span>
+            </td>
+          </tr>
           <tr><th>Year</th><td class="numeric">{{ state.year }}</td></tr>
           <tr><th>Round</th><td class="numeric">{{ state.round }}</td></tr>
           <tr><th>Phase</th><td><strong>{{ state.phase }}</strong></td></tr>
         </tbody>
       </table>
+    </section>
+
+    <section v-if="state && !state.playerTeam">
+      <h3>Select your team</h3>
+      <p class="muted">Pick the F1 team you'll be managing.</p>
+      <div v-if="teamPickError" class="error">{{ teamPickError }}</div>
+      <select v-model="teamPick">
+        <option value="">—</option>
+        <option v-for="t in teamsForPick" :key="t.id" :value="t.id">
+          {{ t.name }}
+        </option>
+      </select>
+      <button class="primary" @click="selectTeam" :disabled="!teamPick">
+        Select team
+      </button>
     </section>
 
     <section v-if="actions">

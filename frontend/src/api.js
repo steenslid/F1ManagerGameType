@@ -46,6 +46,7 @@ export const api = {
   getGameState: () => request('GET', '/api/game/state'),
   getActions: () => request('GET', '/api/game/actions'),
   advance: () => request('POST', '/api/game/advance'),
+  selectTeam: (teamId) => request('POST', '/api/game/select-team', { teamId }),
 
   // Resources
   listRaces: (filter) => request('GET', '/api/races' + qs(filter)),
