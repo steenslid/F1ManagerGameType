@@ -8,7 +8,7 @@ markets, R&D) is not yet here.
 
 ## What's in v0.1
 
-- Gradle/Kotlin project, JVM 21, single module
+- Gradle/Kotlin project, JVM 25, single module
 - HikariCP pool with per-borrow `search_path` switching (the schema-per-save story)
 - Public schema migration — `public.saves` registry
 - Save schema migration — `game` row only, as the seed of the per-save table set

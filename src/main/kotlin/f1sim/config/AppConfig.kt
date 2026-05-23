@@ -16,8 +16,8 @@ data class AppConfig(
 
         fun load(): AppConfig = AppConfig(
             dbUrl = prop("f1sim.db.url", "jdbc:postgresql://localhost:5432/f1sim"),
-            dbUser = prop("f1sim.db.user", "f1sim"),
-            dbPassword = prop("f1sim.db.password", "f1sim"),
+            dbUser = prop("f1sim.db.user", "postgres"),
+            dbPassword = prop("f1sim.db.password", "postgres"),
             httpPort = prop("f1sim.http.port", "7777").toInt(),
             schemaVersion = CURRENT_SCHEMA_VERSION,
         )
