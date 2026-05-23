@@ -6,6 +6,7 @@ import f1sim.game.GameService
 import f1sim.http.routes.DriverRoutes
 import f1sim.http.routes.GameRoutes
 import f1sim.http.routes.PowerUnitRoutes
+import f1sim.http.routes.RaceRoutes
 import f1sim.http.routes.ReferenceRoutes
 import f1sim.http.routes.SaveRoutes
 import f1sim.http.routes.TeamRoutes
@@ -40,6 +41,7 @@ class Server(
         TeamRoutes(db).register(app)
         DriverRoutes(db).register(app)
         TrackRoutes(db).register(app)
+        RaceRoutes(db).register(app)
         PowerUnitRoutes(db).register(app)
         ReferenceRoutes(db).register(app)
 

@@ -1,13 +1,13 @@
 package f1sim.game
 
 /**
- * Pure phase-transition logic. Given a state, returns the state after one
- * advance step.
+ * Pure phase-transition logic. Given a state and the season length, returns
+ * the state after one advance step.
  *
  * Standard race weekend flow (no sprint yet):
  *   PRE_SEASON -> PRACTICE -> QUALIFYING -> RACE -> POST_RACE
- *   POST_RACE -> BETWEEN_ROUNDS (if round < ROUNDS_PER_SEASON)
- *   POST_RACE -> END_OF_SEASON (if round == ROUNDS_PER_SEASON)
+ *   POST_RACE -> BETWEEN_ROUNDS (if round < roundsPerSeason)
+ *   POST_RACE -> END_OF_SEASON (if round == roundsPerSeason)
  *   BETWEEN_ROUNDS -> PRACTICE (round + 1)
  *
  * Season boundary:
@@ -21,14 +21,13 @@ package f1sim.game
  * Year increments on END_OF_SEASON -> OFF_SEASON. `current_season_year` thus
  * means "the year of the season we're currently in or about to play".
  *
- * Total rounds is hard-coded for now. Replace with a query against `races`
- * once that table exists.
+ * Pure: no DB, no logging, no side effects. The caller (GameService) is
+ * responsible for supplying roundsPerSeason, which it queries from the
+ * `races` table.
  */
 object PhaseMachine {
 
-    const val ROUNDS_PER_SEASON = 24
-
-    fun next(state: GameState): GameState = when (state.phase) {
+    fun next(state: GameState, roundsPerSeason: Int): GameState = when (state.phase) {
         Phase.OFF_SEASON -> state.copy(phase = Phase.PRE_SEASON)
 
         Phase.PRE_SEASON -> state.copy(phase = Phase.PRACTICE, round = 1)
@@ -44,7 +43,7 @@ object PhaseMachine {
 
         Phase.RACE -> state.copy(phase = Phase.POST_RACE)
 
-        Phase.POST_RACE -> if (state.round < ROUNDS_PER_SEASON) {
+        Phase.POST_RACE -> if (state.round < roundsPerSeason) {
             state.copy(phase = Phase.BETWEEN_ROUNDS)
         } else {
             state.copy(phase = Phase.END_OF_SEASON)

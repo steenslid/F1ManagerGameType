@@ -12,6 +12,10 @@ import java.sql.Connection
  *   - advance one phase via [PhaseMachine] and persist
  *   - report the actions available in the current phase
  *
+ * Season length is queried from the `races` table per year. Until off-season
+ * pipeline generates next-year calendars, [countRoundsInSeason] falls back to
+ * a default for any season with no calendar rows.
+ *
  * Transition hooks are stubbed — each branch returns `emptyList()` for now.
  * That's where the off-season pipeline, race sim, R&D ticks, etc. eventually
  * plug in. They run inside the same transaction as the state write, so a
@@ -21,11 +25,15 @@ class GameService(private val db: Database) {
 
     private val log = LoggerFactory.getLogger(GameService::class.java)
 
+    // Used only when a year has no calendar yet (future seasons before the
+    // off-season pipeline has generated their races). Real game flow should
+    // never hit this for the current playable year.
+    private val fallbackRoundsPerSeason = 24
+
     // ------------------------------------------------------------------
     // DTOs
     // ------------------------------------------------------------------
 
-    /** Full overview returned by GET /api/game/state. */
     @Serializable
     data class GameOverviewDto(
         val saveId: String,
@@ -37,7 +45,6 @@ class GameService(private val db: Database) {
         val phase: String,
     )
 
-    /** Minimal phase coordinates, used in advance results. */
     @Serializable
     data class PhaseStateDto(
         val year: Int,
@@ -45,7 +52,6 @@ class GameService(private val db: Database) {
         val phase: String,
     )
 
-    /** Response from POST /api/game/advance. */
     @Serializable
     data class AdvanceResultDto(
         val previous: PhaseStateDto,
@@ -53,14 +59,12 @@ class GameService(private val db: Database) {
         val events: List<TransitionEventDto>,
     )
 
-    /** A single event emitted by a transition hook (placeholder). */
     @Serializable
     data class TransitionEventDto(
         val type: String,
         val message: String,
     )
 
-    /** Response from GET /api/game/actions. */
     @Serializable
     data class ActionsDto(
         val phase: String,
@@ -111,11 +115,13 @@ class GameService(private val db: Database) {
             conn.autoCommit = false
             try {
                 val before = readPhaseState(conn)
-                val after = PhaseMachine.next(before)
+                val roundsThisSeason = countRoundsInSeason(conn, before.year)
+                val after = PhaseMachine.next(before, roundsThisSeason)
                 log.info(
-                    "Transition: {} y{} r{} -> {} y{} r{}",
+                    "Transition: {} y{} r{} -> {} y{} r{} (season has {} rounds)",
                     before.phase, before.year, before.round,
                     after.phase, after.year, after.round,
+                    roundsThisSeason,
                 )
                 val events = runTransitionHooks(conn, before, after)
                 writePhaseState(conn, after)
@@ -181,31 +187,42 @@ class GameService(private val db: Database) {
         }
     }
 
-    /**
-     * Per-phase hooks. Each branch is a placeholder; nothing runs yet.
-     * Returns events to surface in the advance response.
-     *
-     * Keyed by the *destination* phase: i.e. "what runs when we enter X".
-     */
+    private fun countRoundsInSeason(conn: Connection, year: Int): Int {
+        conn.prepareStatement("SELECT COUNT(*) FROM races WHERE season_year = ?").use { stmt ->
+            stmt.setInt(1, year)
+            stmt.executeQuery().use { rs ->
+                check(rs.next())
+                val count = rs.getInt(1)
+                return if (count > 0) count else {
+                    log.warn(
+                        "No calendar for year {} — using fallback round count {}. " +
+                            "The off-season pipeline should generate next-year calendars " +
+                            "before play reaches them.",
+                        year, fallbackRoundsPerSeason,
+                    )
+                    fallbackRoundsPerSeason
+                }
+            }
+        }
+    }
+
     @Suppress("UNUSED_PARAMETER")
     private fun runTransitionHooks(
         conn: Connection,
         from: GameState,
         to: GameState,
     ): List<TransitionEventDto> {
-        // Each phase below will eventually run real logic. For v1 they all
-        // return empty event lists.
         return when (to.phase) {
-            Phase.PRE_SEASON -> emptyList()        // TODO: season-start setup, reset cached points
-            Phase.PRACTICE -> emptyList()          // TODO: generate weather forecast for the weekend
-            Phase.QUALIFYING -> emptyList()        // TODO: simulate qualifying, write grid
-            Phase.SPRINT_QUALIFYING -> emptyList() // TODO: sprint qualifying sim
-            Phase.SPRINT -> emptyList()            // TODO: sprint sim
-            Phase.RACE -> emptyList()              // TODO: race sim — the big one
-            Phase.POST_RACE -> emptyList()         // TODO: write race_results, update season_points
-            Phase.BETWEEN_ROUNDS -> emptyList()    // TODO: tick R&D development_projects
-            Phase.END_OF_SEASON -> emptyList()     // TODO: 11-step off-season pipeline
-            Phase.OFF_SEASON -> emptyList()        // No hook — OFF_SEASON is idle
+            Phase.PRE_SEASON -> emptyList()
+            Phase.PRACTICE -> emptyList()
+            Phase.QUALIFYING -> emptyList()
+            Phase.SPRINT_QUALIFYING -> emptyList()
+            Phase.SPRINT -> emptyList()
+            Phase.RACE -> emptyList()
+            Phase.POST_RACE -> emptyList()
+            Phase.BETWEEN_ROUNDS -> emptyList()
+            Phase.END_OF_SEASON -> emptyList()
+            Phase.OFF_SEASON -> emptyList()
         }
     }
 

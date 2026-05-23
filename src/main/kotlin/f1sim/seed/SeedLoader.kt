@@ -18,6 +18,7 @@ import java.util.UUID
  *
  * Insert order in [loadAllInto] respects FK dependencies:
  *   eras, compounds, tracks (no FKs)
+ *   races (FK to tracks)
  *   teams (no FKs in v1)
  *   engine_suppliers (FK to teams.works_team_id)
  *   pu_versions (FK to engine_suppliers)
@@ -40,6 +41,7 @@ class SeedLoader {
         loadRegulationEras(conn)
         loadTyreCompounds(conn)
         loadTracks(conn)
+        loadRaces(conn)
         loadTeams(conn)
         loadEngineSuppliers(conn)
         loadPuVersions(conn)
@@ -134,6 +136,27 @@ class SeedLoader {
             stmt.executeBatch()
         }
         log.info("  tracks: {} rows", items.size)
+    }
+
+    private fun loadRaces(conn: Connection) {
+        val items = readSeed(SeedFiles.RACES, RaceSeed.serializer())
+        val sql = """
+            INSERT INTO races
+              (id, season_year, round, track_id, session_format)
+            VALUES (?, ?, ?, ?, ?)
+        """.trimIndent()
+        conn.prepareStatement(sql).use { stmt ->
+            items.forEach { r ->
+                stmt.setObject(1, UUID.randomUUID())
+                stmt.setInt(2, r.seasonYear)
+                stmt.setInt(3, r.round)
+                stmt.setString(4, r.trackId)
+                stmt.setString(5, r.sessionFormat)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        }
+        log.info("  races: {} rows", items.size)
     }
 
     private fun loadTeams(conn: Connection) {

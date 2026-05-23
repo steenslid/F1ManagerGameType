@@ -1,0 +1,12 @@
+[
+  { "season_year": 2026, "round": 1,  "track_id": "suzuka",      "session_format": "STANDARD" },
+  { "season_year": 2026, "round": 2,  "track_id": "imola",       "session_format": "STANDARD" },
+  { "season_year": 2026, "round": 3,  "track_id": "monaco",      "session_format": "STANDARD" },
+  { "season_year": 2026, "round": 4,  "track_id": "barcelona",   "session_format": "STANDARD" },
+  { "season_year": 2026, "round": 5,  "track_id": "spielberg",   "session_format": "SPRINT" },
+  { "season_year": 2026, "round": 6,  "track_id": "silverstone", "session_format": "STANDARD" },
+  { "season_year": 2026, "round": 7,  "track_id": "spa",         "session_format": "STANDARD" },
+  { "season_year": 2026, "round": 8,  "track_id": "monza",       "session_format": "STANDARD" },
+  { "season_year": 2026, "round": 9,  "track_id": "marina-bay",  "session_format": "STANDARD" },
+  { "season_year": 2026, "round": 10, "track_id": "interlagos",  "session_format": "SPRINT" }
+]

@@ -5,7 +5,7 @@
 --   * TEXT primary keys for stable reference data seeded from JSON
 --     (eras, tracks, compounds, teams, engine_suppliers, sponsors).
 --   * UUID primary keys for runtime-generated entities
---     (drivers, personnel, pu_versions).
+--     (drivers, personnel, pu_versions, races).
 --   * Per-save uniqueness is implicit: this entire file runs inside ONE save schema.
 
 -- ============================================================================
@@ -89,6 +89,26 @@ CREATE TABLE tracks (
     CONSTRAINT tracks_rain_range CHECK (rain_probability_baseline BETWEEN 0 AND 1),
     CONSTRAINT tracks_temp_range CHECK (temperature_max_c >= temperature_min_c)
 );
+
+-- ============================================================================
+-- Races (the calendar)
+-- One row per round per season. session_format determines weekend layout.
+-- ============================================================================
+
+CREATE TABLE races (
+    id              UUID         PRIMARY KEY,
+    season_year     INT          NOT NULL,
+    round           INT          NOT NULL,
+    track_id        TEXT         NOT NULL REFERENCES tracks(id) ON DELETE RESTRICT,
+    session_format  TEXT         NOT NULL DEFAULT 'STANDARD',
+
+    UNIQUE (season_year, round),
+    CONSTRAINT races_session_format_valid CHECK (session_format IN ('STANDARD','SPRINT')),
+    CONSTRAINT races_round_positive CHECK (round >= 1)
+);
+
+CREATE INDEX races_season_idx ON races (season_year);
+CREATE INDEX races_track_idx ON races (track_id);
 
 -- ============================================================================
 -- Reference: tyre compounds (C0–C5, INTER, WET)

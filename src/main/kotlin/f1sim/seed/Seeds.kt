@@ -13,8 +13,8 @@ import kotlinx.serialization.Serializable
  * JSON falls back to those values.
  *
  * Notes:
- *   - Drivers, personnel, and pu_versions have UUID primary keys generated at
- *     load time (not in JSON).
+ *   - Drivers, personnel, pu_versions, and races have UUID primary keys
+ *     generated at load time (not in JSON).
  *   - Reference data (eras, compounds, tracks, suppliers, teams, sponsors)
  *     uses TEXT primary keys provided in JSON.
  */
@@ -22,6 +22,7 @@ object SeedFiles {
     const val REGULATION_ERAS = "regulation_eras.json"
     const val TYRE_COMPOUNDS = "tyre_compounds.json"
     const val TRACKS = "tracks.json"
+    const val RACES = "races.json"
     const val TEAMS = "teams.json"
     const val ENGINE_SUPPLIERS = "engine_suppliers.json"
     const val PU_VERSIONS = "pu_versions.json"
@@ -69,6 +70,14 @@ data class TrackSeed(
     val rainProbabilityBaseline: Double,
     val temperatureMinC: Double,
     val temperatureMaxC: Double,
+)
+
+@Serializable
+data class RaceSeed(
+    val seasonYear: Int,
+    val round: Int,
+    val trackId: String,
+    val sessionFormat: String = "STANDARD",
 )
 
 @Serializable
