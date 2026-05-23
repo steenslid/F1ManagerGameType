@@ -7,6 +7,9 @@
 --   * UUID primary keys for runtime-generated entities
 --     (drivers, personnel, pu_versions, races).
 --   * Per-save uniqueness is implicit: this entire file runs inside ONE save schema.
+--
+-- Note: Postgres reserves CURRENT_ROLE as a built-in function, so the
+-- personnel role column is named `role`, not `current_role`.
 
 -- ============================================================================
 -- The save's identity row
@@ -92,7 +95,6 @@ CREATE TABLE tracks (
 
 -- ============================================================================
 -- Races (the calendar)
--- One row per round per season. session_format determines weekend layout.
 -- ============================================================================
 
 CREATE TABLE races (
@@ -111,7 +113,7 @@ CREATE INDEX races_season_idx ON races (season_year);
 CREATE INDEX races_track_idx ON races (track_id);
 
 -- ============================================================================
--- Reference: tyre compounds (C0–C5, INTER, WET)
+-- Reference: tyre compounds
 -- ============================================================================
 
 CREATE TABLE tyre_compounds (
@@ -214,8 +216,6 @@ CREATE INDEX teams_series_idx ON teams (series);
 
 -- ============================================================================
 -- Drivers
--- App-level constraint: if current_racing_team_id is an F1 team,
--- reserve_for_team_id MUST be null. Enforced by SaveService writes.
 -- ============================================================================
 
 CREATE TABLE drivers (
@@ -272,6 +272,7 @@ CREATE INDEX drivers_academy_team_idx ON drivers (academy_team_id);
 
 -- ============================================================================
 -- Personnel
+-- `role` (not `current_role`) — Postgres reserves CURRENT_ROLE as a function.
 -- ============================================================================
 
 CREATE TABLE personnel (
@@ -281,7 +282,7 @@ CREATE TABLE personnel (
     age                             INT          NOT NULL,
 
     current_team_id                 TEXT         REFERENCES teams(id) ON DELETE SET NULL,
-    current_role                    TEXT,
+    role                            TEXT,
     current_salary                  BIGINT       NOT NULL DEFAULT 0,
     contract_expires_year           INT,
     contract_expires_round          INT,
@@ -299,7 +300,7 @@ CREATE TABLE personnel (
     trait_decline_rate              NUMERIC(4,3) NOT NULL,
     trait_loyalty                   NUMERIC(3,2) NOT NULL,
 
-    CONSTRAINT personnel_role_valid CHECK (current_role IS NULL OR current_role IN (
+    CONSTRAINT personnel_role_valid CHECK (role IS NULL OR role IN (
         'PRINCIPAL','TECHNICAL_DIRECTOR','CHIEF_STRATEGIST','CREW_CHIEF','RACE_ENGINEER'
     )),
     CONSTRAINT personnel_age_range CHECK (age BETWEEN 20 AND 75),
