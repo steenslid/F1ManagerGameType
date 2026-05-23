@@ -5,6 +5,7 @@ import f1sim.db.Database
 import f1sim.db.Migrations
 import f1sim.http.Server
 import f1sim.save.SaveService
+import f1sim.seed.SeedLoader
 import org.slf4j.LoggerFactory
 
 fun main() {
@@ -19,10 +20,10 @@ fun main() {
         db.close()
     })
 
-    // Ensure public schema exists.
     Migrations.initPublicSchema(db)
 
-    val saveService = SaveService(db, config)
+    val seedLoader = SeedLoader()
+    val saveService = SaveService(db, config, seedLoader)
     val server = Server(config, db, saveService)
     server.start()
 

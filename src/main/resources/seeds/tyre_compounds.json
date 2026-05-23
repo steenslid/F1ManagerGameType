@@ -1,0 +1,74 @@
+[
+  {
+    "id": "c0",
+    "name": "C0 (Hardest)",
+    "base_pace_factor": 1.015,
+    "degradation_rate": 0.0010,
+    "longevity_laps": 55,
+    "optimal_temp_min_c": 100.0,
+    "optimal_temp_max_c": 145.0
+  },
+  {
+    "id": "c1",
+    "name": "C1",
+    "base_pace_factor": 1.012,
+    "degradation_rate": 0.0015,
+    "longevity_laps": 48,
+    "optimal_temp_min_c": 95.0,
+    "optimal_temp_max_c": 135.0
+  },
+  {
+    "id": "c2",
+    "name": "C2",
+    "base_pace_factor": 1.009,
+    "degradation_rate": 0.0020,
+    "longevity_laps": 40,
+    "optimal_temp_min_c": 90.0,
+    "optimal_temp_max_c": 125.0
+  },
+  {
+    "id": "c3",
+    "name": "C3",
+    "base_pace_factor": 1.006,
+    "degradation_rate": 0.0028,
+    "longevity_laps": 33,
+    "optimal_temp_min_c": 85.0,
+    "optimal_temp_max_c": 115.0
+  },
+  {
+    "id": "c4",
+    "name": "C4",
+    "base_pace_factor": 1.003,
+    "degradation_rate": 0.0040,
+    "longevity_laps": 25,
+    "optimal_temp_min_c": 80.0,
+    "optimal_temp_max_c": 105.0
+  },
+  {
+    "id": "c5",
+    "name": "C5 (Softest)",
+    "base_pace_factor": 1.000,
+    "degradation_rate": 0.0055,
+    "longevity_laps": 18,
+    "optimal_temp_min_c": 75.0,
+    "optimal_temp_max_c": 95.0
+  },
+  {
+    "id": "inter",
+    "name": "Intermediate",
+    "base_pace_factor": 1.080,
+    "degradation_rate": 0.0035,
+    "longevity_laps": 30,
+    "optimal_temp_min_c": 25.0,
+    "optimal_temp_max_c": 60.0
+  },
+  {
+    "id": "wet",
+    "name": "Full Wet",
+    "base_pace_factor": 1.150,
+    "degradation_rate": 0.0025,
+    "longevity_laps": 35,
+    "optimal_temp_min_c": 5.0,
+    "optimal_temp_max_c": 30.0
+  }
+]

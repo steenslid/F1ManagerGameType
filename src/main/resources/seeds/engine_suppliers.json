@@ -1,0 +1,29 @@
+[
+  {
+    "id": "alpha-pu",
+    "name": "Alpha Power Units",
+    "country": "Italy",
+    "entered_year": 1950,
+    "exited_year": null,
+    "works_team_id": "scuderia-rossa",
+    "is_custom_supplier": false
+  },
+  {
+    "id": "bravo-pu",
+    "name": "Bravo Power Units",
+    "country": "Germany",
+    "entered_year": 1994,
+    "exited_year": null,
+    "works_team_id": "silberpfeile",
+    "is_custom_supplier": false
+  },
+  {
+    "id": "charlie-pu",
+    "name": "Charlie Power Units",
+    "country": "Japan",
+    "entered_year": 2015,
+    "exited_year": null,
+    "works_team_id": "energy-racing",
+    "is_custom_supplier": false
+  }
+]

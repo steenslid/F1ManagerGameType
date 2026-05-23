@@ -3,6 +3,7 @@ package f1sim.save
 import f1sim.config.AppConfig
 import f1sim.db.Database
 import f1sim.db.Migrations
+import f1sim.seed.SeedLoader
 import kotlinx.serialization.Serializable
 import org.slf4j.LoggerFactory
 import java.sql.Timestamp
@@ -12,13 +13,19 @@ import java.util.UUID
 /**
  * Save lifecycle. Each save is its own Postgres schema.
  *
- * v1 does the minimum: create/list/load/delete with the `game` row written on
- * creation. Reference-data seed loading (drivers, teams, etc.) is a separate
- * concern and will plug in here once seeds exist.
+ * Creation flow:
+ *   1. Create the per-save schema and run its migrations.
+ *   2. In one transaction (against an admin connection):
+ *        a. Insert the registry row into public.saves.
+ *        b. Switch search_path to the new schema.
+ *        c. Insert the game row.
+ *        d. Run SeedLoader to populate reference data.
+ *   3. If anything in step 2 throws, drop the schema.
  */
 class SaveService(
     private val db: Database,
     private val config: AppConfig,
+    private val seedLoader: SeedLoader,
 ) {
     private val log = LoggerFactory.getLogger(SaveService::class.java)
 
@@ -75,16 +82,18 @@ class SaveService(
         val saveId = UUID.randomUUID()
         val schemaName = "save_" + saveId.toString().replace("-", "_")
         val seed = req.seed ?: UUID.randomUUID().leastSignificantBits
+        val now = Timestamp.from(Instant.now())
 
         // 1. Create the per-save schema and apply its migrations.
         Migrations.createSaveSchema(db, schemaName)
 
-        // 2. Insert the `game` row in the new schema and the registry row in public.
-        val now = Timestamp.from(Instant.now())
+        // 2. Single transaction: registry row + game row + seed data.
         try {
             db.withAdminConnection { conn ->
                 conn.autoCommit = false
                 try {
+                    // Registry row in public.saves
+                    conn.createStatement().use { it.execute("SET search_path TO public") }
                     conn.prepareStatement(
                         """
                         INSERT INTO public.saves
@@ -101,6 +110,7 @@ class SaveService(
                         stmt.executeUpdate()
                     }
 
+                    // Game row + seeds, both in the save schema
                     conn.createStatement().use { it.execute("SET search_path TO \"$schemaName\"") }
                     conn.prepareStatement(
                         """
@@ -120,6 +130,9 @@ class SaveService(
                         stmt.executeUpdate()
                     }
 
+                    // Seed reference data (still in the save schema)
+                    seedLoader.loadAllInto(conn)
+
                     conn.commit()
                 } catch (t: Throwable) {
                     conn.rollback()
@@ -129,7 +142,6 @@ class SaveService(
                 }
             }
         } catch (t: Throwable) {
-            // Rollback schema creation if insert failed
             log.warn("Save creation failed for {}, dropping schema {}", saveId, schemaName, t)
             runCatching { Migrations.dropSaveSchema(db, schemaName) }
             throw t
@@ -172,7 +184,6 @@ class SaveService(
 
         SaveSession.load(saveId, schemaName)
 
-        // Touch last_played_at
         db.withAdminConnection { conn ->
             conn.prepareStatement(
                 "UPDATE public.saves SET last_played_at = now() WHERE save_id = ?"

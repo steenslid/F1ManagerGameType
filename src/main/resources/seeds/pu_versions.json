@@ -1,0 +1,41 @@
+[
+  {
+    "supplier_id": "alpha-pu",
+    "mk_version": 1,
+    "introduced_year": 2026,
+    "ice_top_speed": 85,
+    "ice_fuel_efficiency": 78,
+    "ice_weight": 65,
+    "ers_deployment_power": 82,
+    "ers_recovery_rate": 78,
+    "ers_deployment_efficiency": 80,
+    "reliability": 72,
+    "cooling_requirement": 70
+  },
+  {
+    "supplier_id": "bravo-pu",
+    "mk_version": 1,
+    "introduced_year": 2026,
+    "ice_top_speed": 80,
+    "ice_fuel_efficiency": 88,
+    "ice_weight": 70,
+    "ers_deployment_power": 90,
+    "ers_recovery_rate": 85,
+    "ers_deployment_efficiency": 86,
+    "reliability": 85,
+    "cooling_requirement": 62
+  },
+  {
+    "supplier_id": "charlie-pu",
+    "mk_version": 1,
+    "introduced_year": 2026,
+    "ice_top_speed": 82,
+    "ice_fuel_efficiency": 84,
+    "ice_weight": 68,
+    "ers_deployment_power": 85,
+    "ers_recovery_rate": 88,
+    "ers_deployment_efficiency": 82,
+    "reliability": 88,
+    "cooling_requirement": 66
+  }
+]
