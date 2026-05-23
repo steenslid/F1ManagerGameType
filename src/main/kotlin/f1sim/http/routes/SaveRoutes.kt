@@ -1,6 +1,7 @@
 package f1sim.http.routes
 
 import f1sim.http.Envelope
+import f1sim.http.timed
 import f1sim.save.SaveService
 import io.javalin.Javalin
 import io.javalin.http.Context
@@ -10,12 +11,6 @@ import java.util.UUID
 
 /**
  * /api/saves — list, create, load, delete.
- *
- * Per API spec from the design doc:
- *   GET    /api/saves
- *   POST   /api/saves
- *   POST   /api/saves/{id}/load
- *   DELETE /api/saves/{id}
  */
 class SaveRoutes(private val saveService: SaveService) {
 
@@ -51,29 +46,5 @@ class SaveRoutes(private val saveService: SaveService) {
         val id = UUID.fromString(ctx.pathParam("id"))
         saveService.delete(id)
         JsonNull
-    }
-}
-
-/**
- * Inline helper: time the handler, write envelope, set content type.
- * Kept here as an extension so routes stay compact.
- */
-internal inline fun Context.timed(block: () -> kotlinx.serialization.json.JsonElement) {
-    val start = System.nanoTime()
-    try {
-        val data = block()
-        val elapsed = (System.nanoTime() - start) / 1_000_000
-        contentType("application/json")
-        result(Envelope.success(data, elapsed))
-    } catch (t: Throwable) {
-        val elapsed = (System.nanoTime() - start) / 1_000_000
-        val code = when (t) {
-            is IllegalArgumentException -> "BAD_REQUEST"
-            is IllegalStateException -> "BAD_STATE"
-            else -> "INTERNAL_ERROR"
-        }
-        status(if (code == "INTERNAL_ERROR") 500 else 400)
-        contentType("application/json")
-        result(Envelope.failure(Envelope.ApiError(code, t.message ?: code), elapsed))
     }
 }
