@@ -40,6 +40,7 @@ class ReferenceRoutes(private val db: Database) {
         val endYear: Int?,
         val performanceResetSeverity: Double,
         val ersShare: Double,
+        val fastestLapPoint: Boolean,
     )
 
     fun register(app: Javalin) {
@@ -48,8 +49,6 @@ class ReferenceRoutes(private val db: Database) {
         app.get("/api/regulation-eras", ::listEras)
         app.get("/api/regulation-eras/{id}", ::getEra)
     }
-
-    // -- tyre_compounds --
 
     private fun listCompounds(ctx: Context) = ctx.timed {
         SaveSession.requireLoaded()
@@ -78,8 +77,6 @@ class ReferenceRoutes(private val db: Database) {
         Envelope.encode(compound, TyreCompoundDto.serializer())
     }
 
-    // -- regulation_eras --
-
     private fun listEras(ctx: Context) = ctx.timed {
         SaveSession.requireLoaded()
         val eras = db.withConnection { conn ->
@@ -107,8 +104,6 @@ class ReferenceRoutes(private val db: Database) {
         Envelope.encode(era, RegulationEraDto.serializer())
     }
 
-    // -- mappers --
-
     private fun mapCompound(rs: ResultSet): TyreCompoundDto = TyreCompoundDto(
         id = rs.getString("id"),
         name = rs.getString("name"),
@@ -126,6 +121,7 @@ class ReferenceRoutes(private val db: Database) {
         endYear = rs.getIntOrNull("end_year"),
         performanceResetSeverity = rs.getDouble("performance_reset_severity"),
         ersShare = rs.getDouble("ers_share"),
+        fastestLapPoint = rs.getBoolean("fastest_lap_point"),
     )
 
     private companion object {
@@ -137,7 +133,8 @@ class ReferenceRoutes(private val db: Database) {
 
         const val ERA_COLUMNS = """
             SELECT id, name, start_year, end_year,
-                   performance_reset_severity, ers_share
+                   performance_reset_severity, ers_share,
+                   fastest_lap_point
               FROM regulation_eras
         """
     }

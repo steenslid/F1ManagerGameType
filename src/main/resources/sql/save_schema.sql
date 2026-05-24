@@ -43,6 +43,9 @@ CREATE UNIQUE INDEX game_singleton ON game ((true));
 
 -- ============================================================================
 -- Reference: regulation eras
+-- fastest_lap_point controls whether the fastest lap awards +1 to a driver
+-- finishing in the top 10 (FIA dropped this for 2025+, so the 2026 era has
+-- it false).
 -- ============================================================================
 
 CREATE TABLE regulation_eras (
@@ -52,6 +55,7 @@ CREATE TABLE regulation_eras (
     end_year                        INT,
     performance_reset_severity      NUMERIC(3,2) NOT NULL,
     ers_share                       NUMERIC(3,2) NOT NULL,
+    fastest_lap_point               BOOLEAN      NOT NULL DEFAULT FALSE,
 
     CONSTRAINT reg_eras_reset_range CHECK (performance_reset_severity BETWEEN 0 AND 1),
     CONSTRAINT reg_eras_ers_range CHECK (ers_share BETWEEN 0 AND 1),
@@ -208,7 +212,6 @@ CREATE TABLE teams (
     CONSTRAINT teams_pit_crew_range CHECK (pit_crew_rating BETWEEN 0 AND 100)
 );
 
--- Deferred FKs that point at teams.
 ALTER TABLE engine_suppliers
     ADD CONSTRAINT engine_suppliers_works_team_fk
     FOREIGN KEY (works_team_id) REFERENCES teams(id) ON DELETE SET NULL;
@@ -345,3 +348,39 @@ CREATE TABLE pu_versions (
 );
 
 CREATE INDEX pu_versions_supplier_idx ON pu_versions (supplier_id);
+
+-- ============================================================================
+-- Race results
+-- One row per (race, driver). Written across two phases:
+--   QUALIFYING -> grid_position, status=QUALIFIED, pole on P1
+--   POST_RACE  -> finishing_position, points, status, fastest_lap, dnf_cause
+-- team_id is denormalized so mid-season driver swaps don't lose attribution.
+-- ============================================================================
+
+CREATE TABLE race_results (
+    race_id             UUID         NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+    driver_id           UUID         NOT NULL REFERENCES drivers(id) ON DELETE RESTRICT,
+    team_id             TEXT         NOT NULL REFERENCES teams(id) ON DELETE RESTRICT,
+
+    grid_position       INT,
+    finishing_position  INT,
+    points              NUMERIC(5,2) NOT NULL DEFAULT 0,
+    status              TEXT         NOT NULL DEFAULT 'QUALIFIED',
+    pole                BOOLEAN      NOT NULL DEFAULT FALSE,
+    fastest_lap         BOOLEAN      NOT NULL DEFAULT FALSE,
+    dnf_cause           TEXT,
+
+    PRIMARY KEY (race_id, driver_id),
+    CONSTRAINT race_results_status_valid CHECK (status IN (
+        'QUALIFIED','FINISHED','DNF','DSQ','DNS'
+    )),
+    CONSTRAINT race_results_grid_valid CHECK (
+        grid_position IS NULL OR grid_position >= 1
+    ),
+    CONSTRAINT race_results_finishing_valid CHECK (
+        finishing_position IS NULL OR finishing_position >= 1
+    )
+);
+
+CREATE INDEX race_results_driver_idx ON race_results (driver_id);
+CREATE INDEX race_results_team_idx ON race_results (team_id);

@@ -7,6 +7,8 @@ const compounds = ref([])
 const eras = ref([])
 const suppliers = ref([])
 const puVersions = ref([])
+const personnel = ref([])
+const sponsors = ref([])
 
 const error = ref(null)
 const loading = ref(false)
@@ -15,23 +17,31 @@ async function refresh() {
   loading.value = true
   error.value = null
   try {
-    const [a, b, c, d, e] = await Promise.all([
+    const [a, b, c, d, e, f, g] = await Promise.all([
       api.listTracks(),
       api.listTyreCompounds(),
       api.listRegulationEras(),
       api.listEngineSuppliers(),
       api.listPuVersions(),
+      api.listPersonnel(),
+      api.listSponsors(),
     ])
     tracks.value = a.data
     compounds.value = b.data
     eras.value = c.data
     suppliers.value = d.data
     puVersions.value = e.data
+    personnel.value = f.data
+    sponsors.value = g.data
   } catch (err) {
     error.value = err.message
   } finally {
     loading.value = false
   }
+}
+
+function fmtMoney(n) {
+  return '$' + new Intl.NumberFormat().format(n)
 }
 
 onMounted(refresh)
@@ -74,6 +84,74 @@ onMounted(refresh)
             <td class="numeric">{{ t.pitLaneLossSeconds.toFixed(1) }}s</td>
             <td class="numeric">{{ t.overtakeDifficulty.toFixed(2) }}</td>
             <td class="numeric">{{ t.rainProbabilityBaseline.toFixed(2) }}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Personnel ({{ personnel.length }})</h3>
+      <table v-if="personnel.length">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Nat.</th>
+            <th class="numeric">Age</th>
+            <th>Team</th>
+            <th>Role</th>
+            <th class="numeric">Lead</th>
+            <th class="numeric">Design</th>
+            <th class="numeric">Strategy</th>
+            <th class="numeric">Crew</th>
+            <th class="numeric">Driver</th>
+            <th class="numeric">Salary</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="p in personnel" :key="p.id">
+            <td>{{ p.name }}</td>
+            <td>{{ p.nationality }}</td>
+            <td class="numeric">{{ p.age }}</td>
+            <td>
+              <span v-if="p.currentTeamId">{{ p.currentTeamId }}</span>
+              <span v-else class="muted">—</span>
+            </td>
+            <td>
+              <span v-if="p.role" class="pill">{{ p.role }}</span>
+              <span v-else class="muted">—</span>
+            </td>
+            <td class="numeric">{{ p.skills.leadership }}</td>
+            <td class="numeric">{{ p.skills.design }}</td>
+            <td class="numeric">{{ p.skills.strategy }}</td>
+            <td class="numeric">{{ p.skills.crewManagement }}</td>
+            <td class="numeric">{{ p.skills.driverManagement }}</td>
+            <td class="numeric">{{ fmtMoney(p.currentSalary) }}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Sponsors ({{ sponsors.length }})</h3>
+      <table v-if="sponsors.length">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Country</th>
+            <th>Tier</th>
+            <th>Industry</th>
+            <th class="numeric">Prestige</th>
+            <th class="numeric">Budget min</th>
+            <th class="numeric">Budget max</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="s in sponsors" :key="s.id">
+            <td><code>{{ s.id }}</code></td>
+            <td>{{ s.name }}</td>
+            <td>{{ s.country }}</td>
+            <td><span class="pill">{{ s.tier }}</span></td>
+            <td>{{ s.industry }}</td>
+            <td class="numeric">{{ s.prestige }}</td>
+            <td class="numeric">{{ fmtMoney(s.budget.min) }}</td>
+            <td class="numeric">{{ fmtMoney(s.budget.max) }}</td>
           </tr>
         </tbody>
       </table>

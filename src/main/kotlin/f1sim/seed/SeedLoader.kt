@@ -13,19 +13,14 @@ import java.util.UUID
 /**
  * Loads reference and initial-state data into a freshly-created save schema.
  *
- * Pattern: one method per table. Each method reads a typed list from the
- * matching JSON file, then bulk-inserts via PreparedStatement.executeBatch().
- *
  * Insert order in [loadAllInto] respects FK dependencies:
- *   eras, compounds, tracks (no FKs)
+ *   eras, compounds, tracks, sponsors  (no FKs)
  *   races (FK to tracks)
  *   teams (no FKs in v1)
  *   engine_suppliers (FK to teams.works_team_id)
  *   pu_versions (FK to engine_suppliers)
  *   drivers (FKs to teams)
- *
- * The caller is responsible for transaction management and search_path. This
- * class only issues SQL against the connection it's given.
+ *   personnel (FK to teams)
  */
 class SeedLoader {
 
@@ -41,24 +36,23 @@ class SeedLoader {
         loadRegulationEras(conn)
         loadTyreCompounds(conn)
         loadTracks(conn)
+        loadSponsors(conn)
         loadRaces(conn)
         loadTeams(conn)
         loadEngineSuppliers(conn)
         loadPuVersions(conn)
         loadDrivers(conn)
+        loadPersonnel(conn)
         log.info("Seeding complete")
     }
-
-    // ------------------------------------------------------------------
-    // Per-table loaders
-    // ------------------------------------------------------------------
 
     private fun loadRegulationEras(conn: Connection) {
         val items = readSeed(SeedFiles.REGULATION_ERAS, RegulationEraSeed.serializer())
         val sql = """
             INSERT INTO regulation_eras
-              (id, name, start_year, end_year, performance_reset_severity, ers_share)
-            VALUES (?, ?, ?, ?, ?, ?)
+              (id, name, start_year, end_year, performance_reset_severity, ers_share,
+               fastest_lap_point)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """.trimIndent()
         conn.prepareStatement(sql).use { stmt ->
             items.forEach { e ->
@@ -68,6 +62,7 @@ class SeedLoader {
                 stmt.setIntOrNull(4, e.endYear)
                 stmt.setDouble(5, e.performanceResetSeverity)
                 stmt.setDouble(6, e.ersShare)
+                stmt.setBoolean(7, e.fastestLapPoint)
                 stmt.addBatch()
             }
             stmt.executeBatch()
@@ -136,6 +131,35 @@ class SeedLoader {
             stmt.executeBatch()
         }
         log.info("  tracks: {} rows", items.size)
+    }
+
+    private fun loadSponsors(conn: Connection) {
+        val items = readSeed(SeedFiles.SPONSORS, SponsorSeed.serializer())
+        val sql = """
+            INSERT INTO sponsors
+              (id, name, country, tier, industry, prestige,
+               performance_sensitivity, risk_tolerance, prestige_preference,
+               budget_min, budget_max)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """.trimIndent()
+        conn.prepareStatement(sql).use { stmt ->
+            items.forEach { s ->
+                stmt.setString(1, s.id)
+                stmt.setString(2, s.name)
+                stmt.setString(3, s.country)
+                stmt.setString(4, s.tier)
+                stmt.setString(5, s.industry)
+                stmt.setInt(6, s.prestige)
+                stmt.setDouble(7, s.performanceSensitivity)
+                stmt.setDouble(8, s.riskTolerance)
+                stmt.setDouble(9, s.prestigePreference)
+                stmt.setLong(10, s.budgetMin)
+                stmt.setLong(11, s.budgetMax)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        }
+        log.info("  sponsors: {} rows", items.size)
     }
 
     private fun loadRaces(conn: Connection) {
@@ -307,9 +331,46 @@ class SeedLoader {
         log.info("  drivers: {} rows", items.size)
     }
 
-    // ------------------------------------------------------------------
-    // Helpers
-    // ------------------------------------------------------------------
+    private fun loadPersonnel(conn: Connection) {
+        val items = readSeed(SeedFiles.PERSONNEL, PersonnelSeed.serializer())
+        val sql = """
+            INSERT INTO personnel
+              (id, name, nationality, age,
+               current_team_id, role, current_salary,
+               contract_expires_year, contract_expires_round, retired,
+               development_pool,
+               skill_leadership, skill_design, skill_strategy,
+               skill_crew_management, skill_driver_management,
+               trait_peak_age, trait_decline_rate, trait_loyalty)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """.trimIndent()
+        conn.prepareStatement(sql).use { stmt ->
+            items.forEach { p ->
+                stmt.setObject(1, UUID.randomUUID())
+                stmt.setString(2, p.name)
+                stmt.setString(3, p.nationality)
+                stmt.setInt(4, p.age)
+                stmt.setStringOrNull(5, p.currentTeamId)
+                stmt.setStringOrNull(6, p.role)
+                stmt.setLong(7, p.currentSalary)
+                stmt.setIntOrNull(8, p.contractExpiresYear)
+                stmt.setIntOrNull(9, p.contractExpiresRound)
+                stmt.setBoolean(10, p.retired)
+                stmt.setInt(11, p.developmentPool)
+                stmt.setInt(12, p.skillLeadership)
+                stmt.setInt(13, p.skillDesign)
+                stmt.setInt(14, p.skillStrategy)
+                stmt.setInt(15, p.skillCrewManagement)
+                stmt.setInt(16, p.skillDriverManagement)
+                stmt.setInt(17, p.traitPeakAge)
+                stmt.setDouble(18, p.traitDeclineRate)
+                stmt.setDouble(19, p.traitLoyalty)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        }
+        log.info("  personnel: {} rows", items.size)
+    }
 
     private fun <T> readSeed(fileName: String, elementSerializer: KSerializer<T>): List<T> {
         val path = "/seeds/$fileName"

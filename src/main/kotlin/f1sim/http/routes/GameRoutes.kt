@@ -7,7 +7,8 @@ import io.javalin.Javalin
 import io.javalin.http.Context
 
 /**
- * /api/game — overview, available actions, phase advance, team selection.
+ * /api/game — overview, available actions, phase advance, team selection,
+ * current race lookup.
  */
 class GameRoutes(private val gameService: GameService) {
 
@@ -16,6 +17,7 @@ class GameRoutes(private val gameService: GameService) {
         app.get("/api/game/actions", ::actions)
         app.post("/api/game/advance", ::advance)
         app.post("/api/game/select-team", ::selectTeam)
+        app.get("/api/game/current-race", ::currentRace)
     }
 
     private fun state(ctx: Context) = ctx.timed {
@@ -40,5 +42,10 @@ class GameRoutes(private val gameService: GameService) {
         )
         val overview = gameService.selectTeam(req.teamId)
         Envelope.encode(overview, GameService.GameOverviewDto.serializer())
+    }
+
+    private fun currentRace(ctx: Context) = ctx.timed {
+        val race = gameService.currentRace()
+        Envelope.encode(race, GameService.CurrentRaceDto.serializer())
     }
 }

@@ -5,10 +5,13 @@ import f1sim.db.Database
 import f1sim.game.GameService
 import f1sim.http.routes.DriverRoutes
 import f1sim.http.routes.GameRoutes
+import f1sim.http.routes.PersonnelRoutes
 import f1sim.http.routes.PowerUnitRoutes
+import f1sim.http.routes.RaceResultsRoutes
 import f1sim.http.routes.RaceRoutes
 import f1sim.http.routes.ReferenceRoutes
 import f1sim.http.routes.SaveRoutes
+import f1sim.http.routes.SponsorRoutes
 import f1sim.http.routes.TeamRoutes
 import f1sim.http.routes.TrackRoutes
 import f1sim.save.SaveService
@@ -40,9 +43,12 @@ class Server(
         GameRoutes(gameService).register(app)
         TeamRoutes(db).register(app)
         DriverRoutes(db).register(app)
+        PersonnelRoutes(db).register(app)
         TrackRoutes(db).register(app)
         RaceRoutes(db).register(app)
+        RaceResultsRoutes(db).register(app)
         PowerUnitRoutes(db).register(app)
+        SponsorRoutes(db).register(app)
         ReferenceRoutes(db).register(app)
 
         app.get("/api/health") { ctx ->

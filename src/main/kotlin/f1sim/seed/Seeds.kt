@@ -23,10 +23,12 @@ object SeedFiles {
     const val TYRE_COMPOUNDS = "tyre_compounds.json"
     const val TRACKS = "tracks.json"
     const val RACES = "races.json"
+    const val SPONSORS = "sponsors.json"
     const val TEAMS = "teams.json"
     const val ENGINE_SUPPLIERS = "engine_suppliers.json"
     const val PU_VERSIONS = "pu_versions.json"
     const val DRIVERS = "drivers.json"
+    const val PERSONNEL = "personnel.json"
 }
 
 @Serializable
@@ -37,6 +39,7 @@ data class RegulationEraSeed(
     val endYear: Int? = null,
     val performanceResetSeverity: Double,
     val ersShare: Double,
+    val fastestLapPoint: Boolean = false,
 )
 
 @Serializable
@@ -78,6 +81,21 @@ data class RaceSeed(
     val round: Int,
     val trackId: String,
     val sessionFormat: String = "STANDARD",
+)
+
+@Serializable
+data class SponsorSeed(
+    val id: String,
+    val name: String,
+    val country: String,
+    val tier: String,
+    val industry: String,
+    val prestige: Int,
+    val performanceSensitivity: Double,
+    val riskTolerance: Double,
+    val prestigePreference: Double,
+    val budgetMin: Long,
+    val budgetMax: Long,
 )
 
 @Serializable
@@ -159,4 +177,26 @@ data class DriverSeed(
     val traitLoyalty: Double,
     val traitTemperament: Double,
     val traitMarketValueModifier: Double,
+)
+
+@Serializable
+data class PersonnelSeed(
+    val name: String,
+    val nationality: String,
+    val age: Int,
+    val currentTeamId: String? = null,
+    val role: String? = null,
+    val currentSalary: Long = 0,
+    val contractExpiresYear: Int? = null,
+    val contractExpiresRound: Int? = null,
+    val retired: Boolean = false,
+    val developmentPool: Int = 0,
+    val skillLeadership: Int,
+    val skillDesign: Int,
+    val skillStrategy: Int,
+    val skillCrewManagement: Int,
+    val skillDriverManagement: Int,
+    val traitPeakAge: Int,
+    val traitDeclineRate: Double,
+    val traitLoyalty: Double,
 )

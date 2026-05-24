@@ -47,14 +47,18 @@ export const api = {
   getActions: () => request('GET', '/api/game/actions'),
   advance: () => request('POST', '/api/game/advance'),
   selectTeam: (teamId) => request('POST', '/api/game/select-team', { teamId }),
+  getCurrentRace: () => request('GET', '/api/game/current-race'),
 
   // Resources
   listRaces: (filter) => request('GET', '/api/races' + qs(filter)),
+  listRaceResults: (filter) => request('GET', '/api/race-results' + qs(filter)),
   listTeams: (filter) => request('GET', '/api/teams' + qs(filter)),
   listDrivers: (filter) => request('GET', '/api/drivers' + qs(filter)),
+  listPersonnel: (filter) => request('GET', '/api/personnel' + qs(filter)),
   listTracks: () => request('GET', '/api/tracks'),
   listEngineSuppliers: () => request('GET', '/api/engine-suppliers'),
   listPuVersions: (filter) => request('GET', '/api/pu-versions' + qs(filter)),
+  listSponsors: (filter) => request('GET', '/api/sponsors' + qs(filter)),
   listTyreCompounds: () => request('GET', '/api/tyre-compounds'),
   listRegulationEras: () => request('GET', '/api/regulation-eras'),
 }
