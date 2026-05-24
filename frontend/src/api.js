@@ -49,6 +49,14 @@ export const api = {
   selectTeam: (teamId) => request('POST', '/api/game/select-team', { teamId }),
   getCurrentRace: () => request('GET', '/api/game/current-race'),
 
+  // Race weekend
+  viewPractice: () => request('GET', '/api/race-weekend/practice'),
+  setPracticeFocus: (driverId, focus) =>
+    request('POST', '/api/race-weekend/practice', { driverId, focus }),
+
+  // Standings
+  getStandings: (filter) => request('GET', '/api/standings' + qs(filter)),
+
   // Resources
   listRaces: (filter) => request('GET', '/api/races' + qs(filter)),
   listRaceResults: (filter) => request('GET', '/api/race-results' + qs(filter)),

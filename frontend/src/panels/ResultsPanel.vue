@@ -5,7 +5,7 @@ import { api } from '../api.js'
 const state = ref(null)
 const currentRace = ref(null)
 const currentResults = ref([])
-const teams = ref([])
+const standings = ref(null)
 const seasonResults = ref([])
 
 const loading = ref(false)
@@ -20,22 +20,20 @@ async function refresh() {
     const s = await api.getGameState()
     state.value = s.data
 
-    // Try to load the current race (404s outside a weekend).
     try {
       const r = await api.getCurrentRace()
       currentRace.value = r.data
       const rr = await api.listRaceResults({ race: r.data.raceId })
       currentResults.value = rr.data
     } catch (e) {
-      // Not in a race weekend — just leave currentRace null.
       if (!String(e.message).startsWith('[NOT_FOUND]')) {
         throw e
       }
     }
 
-    // Season-to-date team standings.
-    const t = await api.listTeams()
-    teams.value = t.data
+    const st = await api.getStandings({ type: 'both', season: state.value.year })
+    standings.value = st.data
+
     const sr = await api.listRaceResults({ season: state.value.year })
     seasonResults.value = sr.data
   } catch (e) {
@@ -45,8 +43,6 @@ async function refresh() {
   }
 }
 
-// Combined grid + finishing order for the current race.
-// One row per driver, sorted by finishing position when available, else grid.
 const currentRows = computed(() => {
   return [...currentResults.value].sort((a, b) => {
     const af = a.finishingPosition ?? 999
@@ -54,16 +50,6 @@ const currentRows = computed(() => {
     if (af !== bf) return af - bf
     return (a.gridPosition ?? 999) - (b.gridPosition ?? 999)
   })
-})
-
-const teamStandings = computed(() => {
-  return [...teams.value]
-    .map(t => ({
-      id: t.id,
-      name: t.name,
-      points: t.seasonPoints,
-    }))
-    .sort((a, b) => b.points - a.points)
 })
 
 function fmtPos(n) {
@@ -134,21 +120,51 @@ onMounted(refresh)
       </div>
     </section>
 
-    <section v-if="!loading && teamStandings.length">
-      <h3>Team standings — {{ state?.year }}</h3>
-      <table>
+    <section v-if="!loading && standings">
+      <h3>Driver standings — {{ standings.seasonYear }}</h3>
+      <table v-if="standings.drivers?.length">
+        <thead>
+          <tr>
+            <th class="numeric">Pos</th>
+            <th>Driver</th>
+            <th>Team</th>
+            <th class="numeric">Points</th>
+            <th class="numeric">Wins</th>
+            <th class="numeric">Podiums</th>
+            <th class="numeric">Poles</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="d in standings.drivers" :key="d.driverId">
+            <td class="numeric">{{ d.position }}</td>
+            <td>{{ d.driverName }}</td>
+            <td>{{ d.teamName }}</td>
+            <td class="numeric"><strong>{{ d.points.toFixed(0) }}</strong></td>
+            <td class="numeric">{{ d.wins }}</td>
+            <td class="numeric">{{ d.podiums }}</td>
+            <td class="numeric">{{ d.poles }}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Team standings — {{ standings.seasonYear }}</h3>
+      <table v-if="standings.teams?.length">
         <thead>
           <tr>
             <th class="numeric">Pos</th>
             <th>Team</th>
             <th class="numeric">Points</th>
+            <th class="numeric">Wins</th>
+            <th class="numeric">Podiums</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(t, i) in teamStandings" :key="t.id">
-            <td class="numeric">{{ i + 1 }}</td>
-            <td>{{ t.name }}</td>
-            <td class="numeric"><strong>{{ t.points }}</strong></td>
+          <tr v-for="t in standings.teams" :key="t.teamId">
+            <td class="numeric">{{ t.position }}</td>
+            <td>{{ t.teamName }}</td>
+            <td class="numeric"><strong>{{ t.points.toFixed(0) }}</strong></td>
+            <td class="numeric">{{ t.wins }}</td>
+            <td class="numeric">{{ t.podiums }}</td>
           </tr>
         </tbody>
       </table>

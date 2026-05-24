@@ -18,12 +18,23 @@ import kotlin.random.Random
  *   - let the player pick their team after save creation
  *   - look up the current race (during a weekend)
  *   - drive race-weekend simulation hooks (qualifying, race, post-race)
+ *
+ * Practice focus (set via [RaceWeekendService]) is consumed in the qualifying
+ * and race hooks: drivers with focus = 'SETUP' get a small bonus on
+ * stat_qualifying and stat_pace respectively for this race only.
  */
 class GameService(private val db: Database) {
 
     private val log = LoggerFactory.getLogger(GameService::class.java)
 
     private val fallbackRoundsPerSeason = 24
+
+    /**
+     * Multiplier applied to a driver's qualifying / race stat for this weekend
+     * when their practice focus = 'SETUP'. Per design doc this should scale by
+     * Chief Designer skill (1-3%); v1 uses a flat 1%.
+     */
+    private val setupBonusMultiplier = 1.01
 
     // ------------------------------------------------------------------
     // DTOs
@@ -329,11 +340,6 @@ class GameService(private val db: Database) {
         }
     }
 
-    /**
-     * Look up the regulation era active in [year] and return whether the
-     * fastest-lap bonus point applies. Falls back to false (2025+ default)
-     * if no era covers the year — defensive, shouldn't happen in normal play.
-     */
     private fun fastestLapPointEnabled(conn: Connection, year: Int): Boolean {
         conn.prepareStatement(
             """
@@ -384,24 +390,36 @@ class GameService(private val db: Database) {
                 return emptyList()
             }
 
-        // F1 entrants only — qualifying for the F1 round.
+        // F1 entrants only. LEFT JOIN practice_focus so the SETUP bonus can
+        // be applied to drivers who selected it during PRACTICE.
         val entrants = conn.prepareStatement(
             """
-            SELECT d.id, d.current_racing_team_id, d.stat_qualifying
+            SELECT d.id, d.current_racing_team_id, d.stat_qualifying,
+                   pf.focus AS focus
               FROM drivers d
               JOIN teams t ON t.id = d.current_racing_team_id
+              LEFT JOIN practice_focus pf
+                ON pf.driver_id = d.id AND pf.race_id = ?
              WHERE NOT d.retired
                AND t.series = 'F1'
             """.trimIndent()
         ).use { stmt ->
+            stmt.setObject(1, raceId)
             stmt.executeQuery().use { rs ->
                 buildList {
                     while (rs.next()) {
+                        val baseStat = rs.getInt("stat_qualifying")
+                        val focus = rs.getString("focus")
+                        val effectiveStat = if (focus == "SETUP") {
+                            (baseStat * setupBonusMultiplier).toInt()
+                        } else {
+                            baseStat
+                        }
                         add(
                             RaceSim.QualifyingEntrant(
                                 driverId = rs.getObject("id", UUID::class.java),
                                 teamId = rs.getString("current_racing_team_id"),
-                                statQualifying = rs.getInt("stat_qualifying"),
+                                statQualifying = effectiveStat,
                             )
                         )
                     }
@@ -457,12 +475,16 @@ class GameService(private val db: Database) {
                 return emptyList()
             }
 
+        // Pull grid + practice focus (LEFT JOIN). SETUP gives a stat_pace bonus too.
         val entrants = conn.prepareStatement(
             """
             SELECT rr.driver_id, rr.team_id, rr.grid_position,
-                   d.stat_pace, d.stat_consistency
+                   d.stat_pace, d.stat_consistency,
+                   pf.focus AS focus
               FROM race_results rr
               JOIN drivers d ON d.id = rr.driver_id
+              LEFT JOIN practice_focus pf
+                ON pf.driver_id = rr.driver_id AND pf.race_id = rr.race_id
              WHERE rr.race_id = ?
                AND rr.status = 'QUALIFIED'
             """.trimIndent()
@@ -471,12 +493,19 @@ class GameService(private val db: Database) {
             stmt.executeQuery().use { rs ->
                 buildList {
                     while (rs.next()) {
+                        val basePace = rs.getInt("stat_pace")
+                        val focus = rs.getString("focus")
+                        val effectivePace = if (focus == "SETUP") {
+                            (basePace * setupBonusMultiplier).toInt()
+                        } else {
+                            basePace
+                        }
                         add(
                             RaceSim.RaceEntrant(
                                 driverId = rs.getObject("driver_id", UUID::class.java),
                                 teamId = rs.getString("team_id"),
                                 gridPosition = rs.getInt("grid_position"),
-                                statPace = rs.getInt("stat_pace"),
+                                statPace = effectivePace,
                                 statConsistency = rs.getInt("stat_consistency"),
                             )
                         )
@@ -595,8 +624,6 @@ class GameService(private val db: Database) {
     )
 
     private companion object {
-        // Per-phase salts so qualifying and race draw different randomness
-        // from the same (master_seed, race_id) pair. Arbitrary constants.
         const val QUALIFYING_SALT = 0x5111EFA11L
         const val RACE_SALT = 0xACE0FA10L
     }

@@ -351,10 +351,6 @@ CREATE INDEX pu_versions_supplier_idx ON pu_versions (supplier_id);
 
 -- ============================================================================
 -- Race results
--- One row per (race, driver). Written across two phases:
---   QUALIFYING -> grid_position, status=QUALIFIED, pole on P1
---   POST_RACE  -> finishing_position, points, status, fastest_lap, dnf_cause
--- team_id is denormalized so mid-season driver swaps don't lose attribution.
 -- ============================================================================
 
 CREATE TABLE race_results (
@@ -384,3 +380,24 @@ CREATE TABLE race_results (
 
 CREATE INDEX race_results_driver_idx ON race_results (driver_id);
 CREATE INDEX race_results_team_idx ON race_results (team_id);
+
+-- ============================================================================
+-- Practice focus
+-- One row per (race, driver) recording the player's pre-weekend choice.
+-- SETUP applies a small bonus during qualifying / race; others record intent
+-- only until their backing systems exist.
+-- ============================================================================
+
+CREATE TABLE practice_focus (
+    race_id     UUID         NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+    driver_id   UUID         NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+    focus       TEXT         NOT NULL,
+    set_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (race_id, driver_id),
+    CONSTRAINT practice_focus_valid CHECK (focus IN (
+        'SETUP','TYRE_PROGRAM','RELIABILITY_CHECK','DEVELOPMENT_FEEDBACK'
+    ))
+);
+
+CREATE INDEX practice_focus_driver_idx ON practice_focus (driver_id);

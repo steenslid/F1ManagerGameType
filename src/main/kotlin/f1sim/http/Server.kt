@@ -3,29 +3,32 @@ package f1sim.http
 import f1sim.config.AppConfig
 import f1sim.db.Database
 import f1sim.game.GameService
+import f1sim.game.RaceWeekendService
+import f1sim.game.StandingsService
 import f1sim.http.routes.DriverRoutes
 import f1sim.http.routes.GameRoutes
 import f1sim.http.routes.PersonnelRoutes
 import f1sim.http.routes.PowerUnitRoutes
 import f1sim.http.routes.RaceResultsRoutes
 import f1sim.http.routes.RaceRoutes
+import f1sim.http.routes.RaceWeekendRoutes
 import f1sim.http.routes.ReferenceRoutes
 import f1sim.http.routes.SaveRoutes
 import f1sim.http.routes.SponsorRoutes
+import f1sim.http.routes.StandingsRoutes
 import f1sim.http.routes.TeamRoutes
 import f1sim.http.routes.TrackRoutes
 import f1sim.save.SaveService
 import io.javalin.Javalin
 import org.slf4j.LoggerFactory
 
-/**
- * Javalin wrapper. All routes are registered here in one place.
- */
 class Server(
     private val config: AppConfig,
     private val db: Database,
     private val saveService: SaveService,
     private val gameService: GameService,
+    private val raceWeekendService: RaceWeekendService,
+    private val standingsService: StandingsService,
 ) {
     private val log = LoggerFactory.getLogger(Server::class.java)
     private lateinit var app: Javalin
@@ -47,6 +50,8 @@ class Server(
         TrackRoutes(db).register(app)
         RaceRoutes(db).register(app)
         RaceResultsRoutes(db).register(app)
+        RaceWeekendRoutes(raceWeekendService).register(app)
+        StandingsRoutes(standingsService).register(app)
         PowerUnitRoutes(db).register(app)
         SponsorRoutes(db).register(app)
         ReferenceRoutes(db).register(app)
