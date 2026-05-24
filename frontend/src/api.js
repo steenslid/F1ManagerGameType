@@ -53,6 +53,9 @@ export const api = {
   viewPractice: () => request('GET', '/api/race-weekend/practice'),
   setPracticeFocus: (driverId, focus) =>
     request('POST', '/api/race-weekend/practice', { driverId, focus }),
+  viewStrategy: () => request('GET', '/api/race-weekend/strategy'),
+  setStrategy: (driverId, archetype) =>
+    request('POST', '/api/race-weekend/strategy', { driverId, archetype }),
 
   // Standings
   getStandings: (filter) => request('GET', '/api/standings' + qs(filter)),

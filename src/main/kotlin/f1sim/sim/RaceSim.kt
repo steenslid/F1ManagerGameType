@@ -8,17 +8,19 @@ import kotlin.random.Random
 /**
  * Pure race-weekend simulation. No DB, no logging, no side effects.
  *
- * GameService owns orchestration: reads from the DB, builds value types,
- * calls the sim, writes the results back. Functions take everything they
- * need as parameters so they're testable in isolation.
+ * Stat fields are Double — multipliers (practice SETUP, strategy bonuses,
+ * future car performance modifiers) can move them by fractional amounts
+ * without losing the change to integer truncation at the boundary. DB
+ * stays Int; GameService casts when building entrants.
  *
  * v1 models:
  *   Qualifying: stat_qualifying + gaussian noise. Sort, assign grid.
- *   Race:       stat_pace + grid_bonus + consistency-weighted noise.
+ *   Race:       stat_pace + grid_bonus + strategy_pace_bonus
+ *               + noise scaled by (consistency, strategy variance).
  *               DNFs roll first, finishers sort by score.
  *               Fastest lap: weighted pick from finishers in top 5.
- *               Points: FIA table; +1 for fastest lap if rules allow
- *               (regulation_eras.fastest_lap_point) and driver is in top 10.
+ *               Points: FIA table; +1 for fastest lap when rules allow
+ *               and driver is in top 10.
  */
 object RaceSim {
 
@@ -29,7 +31,7 @@ object RaceSim {
     data class QualifyingEntrant(
         val driverId: UUID,
         val teamId: String,
-        val statQualifying: Int,
+        val statQualifying: Double,
     )
 
     data class QualifyingResult(
@@ -69,7 +71,6 @@ object RaceSim {
     /** FIA points: 25,18,15,12,10,8,6,4,2,1 for top 10. */
     private val POINTS_BY_FINISHING_POSITION = listOf(25, 18, 15, 12, 10, 8, 6, 4, 2, 1)
 
-    /** Bonus point awarded for the fastest lap if rules allow + driver in top 10. */
     private const val FASTEST_LAP_BONUS = 1
 
     private val DNF_CAUSES = listOf(
@@ -77,12 +78,40 @@ object RaceSim {
         "ENGINE_FAILURE", "BRAKES", "GEARBOX",
     )
 
+    /**
+     * Strategy archetype → race effects. paceBonus added to score directly.
+     * sigmaMultiplier scales the noise term: <1 = more consistent (predictable),
+     * >1 = more variance (bigger swings).
+     *
+     * Magnitudes deliberately small. Strategy is a tiebreaker the player
+     * controls; not a primary decider.
+     *
+     * Loose interpretation:
+     *   M_H   — Medium then Hard. Safe baseline. Slight consistency edge.
+     *   S_H   — Soft then Hard. Front-loaded pace, mild variance.
+     *   S_M_M — Soft then two Mediums. Three-stopper. Higher variance.
+     *   M_M_H — Medium-Medium-Hard. Three-stopper, neutral.
+     *   S_S_H — Soft-Soft-Hard. Aggressive. Highest pace bonus, highest variance.
+     */
+    private data class StrategyEffect(val paceBonus: Double, val sigmaMultiplier: Double)
+
+    private val strategyEffects: Map<String, StrategyEffect> = mapOf(
+        "M_H"   to StrategyEffect(paceBonus =  0.0, sigmaMultiplier = 0.9),
+        "S_H"   to StrategyEffect(paceBonus =  1.0, sigmaMultiplier = 1.0),
+        "S_M_M" to StrategyEffect(paceBonus =  0.5, sigmaMultiplier = 1.1),
+        "M_M_H" to StrategyEffect(paceBonus =  0.0, sigmaMultiplier = 1.0),
+        "S_S_H" to StrategyEffect(paceBonus =  2.0, sigmaMultiplier = 1.2),
+    )
+
+    private val defaultStrategyEffect = StrategyEffect(paceBonus = 0.0, sigmaMultiplier = 1.0)
+
     data class RaceEntrant(
         val driverId: UUID,
         val teamId: String,
         val gridPosition: Int,
-        val statPace: Int,
+        val statPace: Double,
         val statConsistency: Int,
+        val strategyArchetype: String?,
     )
 
     data class RaceResult(
@@ -96,10 +125,8 @@ object RaceSim {
     )
 
     /**
-     * @param fastestLapPointEnabled If true (pre-2025 rules / custom era),
-     *   the fastest lap awards +1 to a driver finishing in the top 10.
-     *   Under 2025+ FIA regulations this is false and the fastest-lap flag
-     *   is recorded as a stat without points.
+     * @param fastestLapPointEnabled If true, fastest lap awards +1 to a
+     *   driver finishing in the top 10.
      */
     fun simulateRace(
         entrants: List<RaceEntrant>,
@@ -117,10 +144,12 @@ object RaceSim {
 
         // 2. Score finishers and sort to a finishing order.
         val finishersScored = finishers.map { e ->
+            val strategy = strategyEffects[e.strategyArchetype] ?: defaultStrategyEffect
             val gridBonus = gridBonus(e.gridPosition)
-            val sigma = RACE_PACE_SIGMA * (50.0 / max(e.statConsistency, 25))
+            val baseSigma = RACE_PACE_SIGMA * (50.0 / max(e.statConsistency, 25))
+            val sigma = baseSigma * strategy.sigmaMultiplier
             val noise = rng.gaussian() * sigma
-            val score = e.statPace + gridBonus + noise
+            val score = e.statPace + gridBonus + strategy.paceBonus + noise
             e to score
         }.sortedByDescending { (_, score) -> score }
 
@@ -129,7 +158,7 @@ object RaceSim {
         // 3. Fastest lap: weighted pick from top 5 finishers.
         val topFiveFinishers = finishingOrder.take(5).map { it.first }
         val fastestLapDriver: UUID? = if (topFiveFinishers.isNotEmpty()) {
-            weightedPick(topFiveFinishers, rng) { it.statPace.toDouble() }.driverId
+            weightedPick(topFiveFinishers, rng) { it.statPace }.driverId
         } else null
 
         // 4. Assemble results.

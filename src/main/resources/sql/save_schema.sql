@@ -43,9 +43,6 @@ CREATE UNIQUE INDEX game_singleton ON game ((true));
 
 -- ============================================================================
 -- Reference: regulation eras
--- fastest_lap_point controls whether the fastest lap awards +1 to a driver
--- finishing in the top 10 (FIA dropped this for 2025+, so the 2026 era has
--- it false).
 -- ============================================================================
 
 CREATE TABLE regulation_eras (
@@ -156,7 +153,7 @@ CREATE TABLE sponsors (
 );
 
 -- ============================================================================
--- Engine suppliers (FK to teams added after teams exists)
+-- Engine suppliers
 -- ============================================================================
 
 CREATE TABLE engine_suppliers (
@@ -280,7 +277,6 @@ CREATE INDEX drivers_academy_team_idx ON drivers (academy_team_id);
 
 -- ============================================================================
 -- Personnel
--- `role` (not `current_role`) — Postgres reserves CURRENT_ROLE as a function.
 -- ============================================================================
 
 CREATE TABLE personnel (
@@ -383,9 +379,6 @@ CREATE INDEX race_results_team_idx ON race_results (team_id);
 
 -- ============================================================================
 -- Practice focus
--- One row per (race, driver) recording the player's pre-weekend choice.
--- SETUP applies a small bonus during qualifying / race; others record intent
--- only until their backing systems exist.
 -- ============================================================================
 
 CREATE TABLE practice_focus (
@@ -401,3 +394,24 @@ CREATE TABLE practice_focus (
 );
 
 CREATE INDEX practice_focus_driver_idx ON practice_focus (driver_id);
+
+-- ============================================================================
+-- Race strategy
+-- Per (race, driver). Editable during QUALIFYING; consumed by race sim.
+-- v1 stores the archetype only. When a proper tyre system arrives, per-stint
+-- compound and lap-range rows can be derived from this.
+-- ============================================================================
+
+CREATE TABLE race_strategy (
+    race_id     UUID         NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+    driver_id   UUID         NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+    archetype   TEXT         NOT NULL,
+    set_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (race_id, driver_id),
+    CONSTRAINT race_strategy_valid CHECK (archetype IN (
+        'M_H','S_H','S_M_M','M_M_H','S_S_H'
+    ))
+);
+
+CREATE INDEX race_strategy_driver_idx ON race_strategy (driver_id);
