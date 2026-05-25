@@ -30,6 +30,7 @@ const groupedEvents = computed(() => {
     STAT_DRIFT: [],
     RETIREMENT: [],
     CONTRACT_EXPIRED: [],
+    MARKET_SIGNING: [],
     SPONSOR_REVENUE: [],
     OPERATING_COST: [],
   }
@@ -76,6 +77,7 @@ onMounted(refresh)
           <span class="pill">{{ report.counts.statDrifts }} stat drift</span>
           <span class="pill">{{ report.counts.retirements }} retired</span>
           <span class="pill">{{ report.counts.contractExpirations }} contracts expired</span>
+          <span class="pill">{{ report.counts.marketSignings }} signings</span>
           <span class="pill">{{ report.counts.sponsorRevenue }} sponsor</span>
           <span class="pill">{{ report.counts.operatingCosts }} ops cost</span>
         </p>
@@ -103,6 +105,19 @@ onMounted(refresh)
             <tr v-for="e in groupedEvents.CONTRACT_EXPIRED" :key="e.id">
               <td>{{ e.subjectName }}</td>
               <td><span class="pill">{{ e.subjectKind }}</span></td>
+              <td>{{ e.message }}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 v-if="groupedEvents.MARKET_SIGNING.length">Driver market signings</h3>
+        <table v-if="groupedEvents.MARKET_SIGNING.length">
+          <thead>
+            <tr><th>Driver</th><th>Detail</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="e in groupedEvents.MARKET_SIGNING" :key="e.id">
+              <td>{{ e.subjectName }}</td>
               <td>{{ e.message }}</td>
             </tr>
           </tbody>

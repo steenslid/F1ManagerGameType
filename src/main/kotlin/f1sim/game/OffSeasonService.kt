@@ -24,13 +24,16 @@ import kotlin.random.Random
  *     4. Contract expirations — non-retired drivers/personnel whose
  *        contract_expires_year <= ending year are released to free-agent
  *        state (team affiliations nulled, contract dates kept as history).
+ *     5. Driver market — AI-driven multi-round matching fills open F1
+ *        racing seats from the free-agent pool. Two-year contracts at
+ *        pace-banded salaries scaled by team prestige.
  *
  *   PRE_SEASON hooks (the new year about to start):
- *     5. Sponsor revenue tick — sum active sponsorships, set current_year_income.
- *     6. Operating cost tick — base_operating_cost + driver salaries +
+ *     6. Sponsor revenue tick — sum active sponsorships, set current_year_income.
+ *     7. Operating cost tick — base_operating_cost + driver salaries +
  *        personnel salaries, set current_year_expenses.
  *
- * Remaining steps stubbed: driver / personnel / sponsor markets, junior
+ * Remaining steps stubbed: personnel market, sponsor market, junior
  * promotions, regulation reset, board review, calendar generation.
  *
  * All hooks write to `off_season_events` for the report. The whole pipeline
@@ -63,10 +66,14 @@ class OffSeasonService(private val db: Database) {
         // Retirement nulls team affiliations, so an expired-contract retiree fails
         // the "has a team" predicate below and is skipped naturally.
         val expirationEvents = rollContractExpirations(conn, endingSeasonYear)
-        val total = ageEvents + retirementEvents + expirationEvents
+        // Driver market runs last so the free-agent pool reflects everyone
+        // released this off-season by contract expiration. (Retirees are
+        // filtered out — they have `retired = true`.)
+        val marketEvents = runDriverMarket(conn, endingSeasonYear, masterSeed)
+        val total = ageEvents + retirementEvents + expirationEvents + marketEvents
         log.info(
-            "OFF_SEASON for ending year {}: {} aging events, {} retirements, {} contract expirations",
-            endingSeasonYear, ageEvents, retirementEvents, expirationEvents,
+            "OFF_SEASON for ending year {}: {} aging, {} retirements, {} contract expirations, {} market signings",
+            endingSeasonYear, ageEvents, retirementEvents, expirationEvents, marketEvents,
         )
         return total
     }
@@ -632,7 +639,326 @@ class OffSeasonService(private val db: Database) {
     }
 
     // ------------------------------------------------------------------
-    // Step 5: Sponsor revenue tick (PRE_SEASON)
+    // Step 5: Driver market
+    // ------------------------------------------------------------------
+
+    /**
+     * AI-driven driver market. Free-agent drivers are matched to open F1
+     * racing seats over a few rounds of two-sided preference matching:
+     *
+     *   - Teams iterate in prestige order each round.
+     *   - For each open seat the team scores all unsigned free agents
+     *     and identifies its top pick.
+     *   - The driver scores the open teams and ranks them; a signing
+     *     happens iff this team is in the driver's top-K for the round
+     *     (K = 3, 5, 10 across rounds 1-3). This produces the "top of
+     *     market signs first" feel from the design doc: top teams get
+     *     their first choice in round 1; mid teams settle later; bottom
+     *     teams fill remaining seats in round 3.
+     *
+     * No player input in v1 — entirely AI-driven. Player offers come in
+     * a follow-up slice that will use the same matching engine but with
+     * player offers seeded in alongside AI proposals.
+     *
+     * Contracts are 2 years; salary = pace-banded base × team prestige
+     * factor (prestige / 75.0). All scoring uses a single deterministic
+     * RNG seeded from masterSeed XOR MARKET_SALT XOR endingSeasonYear so
+     * the same save + year always produces identical signings.
+     *
+     * Open known-issues (logged in remaining.md):
+     *   - No AI personality modulation (ai_aggression, ai_frugality unused)
+     *   - No affordability check vs cash_reserves
+     *   - No previous-team loyalty bonus
+     *   - Leftover empty seats stay empty (junior promotions not yet built)
+     */
+    private fun runDriverMarket(
+        conn: Connection,
+        endingSeasonYear: Int,
+        masterSeed: Long,
+    ): Int {
+        val rng = Random(masterSeed xor MARKET_SALT xor endingSeasonYear.toLong())
+
+        val freeAgents = readMarketFreeAgents(conn).toMutableList()
+        val marketTeams = readMarketTeams(conn).toMutableList()
+
+        if (freeAgents.isEmpty() || marketTeams.none { it.openSeats > 0 }) {
+            log.info(
+                "Driver market: nothing to do (free agents: {}, teams with open seats: {})",
+                freeAgents.size, marketTeams.count { it.openSeats > 0 },
+            )
+            return 0
+        }
+
+        val signings = resolveMarketRounds(freeAgents, marketTeams, rng, endingSeasonYear)
+        if (signings.isEmpty()) {
+            log.info("Driver market: 0 signings after {} rounds", MARKET_ROUNDS)
+            return 0
+        }
+
+        applyMarketSignings(conn, signings, endingSeasonYear)
+        return signings.size
+    }
+
+    private data class MarketAgent(
+        val id: UUID,
+        val name: String,
+        val statPace: Int,
+        val currentAge: Int,
+        val morale: Int,
+    )
+
+    private data class MarketTeam(
+        val id: String,
+        val name: String,
+        val prestige: Int,
+        val seasonPoints: Int,
+        var openSeats: Int,
+    )
+
+    private data class MarketSigning(
+        val agent: MarketAgent,
+        val team: MarketTeam,
+        val salary: Long,
+        val expiresYear: Int,
+    )
+
+    private fun readMarketFreeAgents(conn: Connection): List<MarketAgent> {
+        // Drivers without a racing team and not retired. Age guard keeps the
+        // pool sensible (rules out anything weird that crept into the data).
+        return conn.prepareStatement(
+            """
+            SELECT id, name, stat_pace, current_age, morale
+              FROM drivers
+             WHERE NOT retired
+               AND current_racing_team_id IS NULL
+               AND current_age BETWEEN 18 AND 50
+             ORDER BY name ASC
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            MarketAgent(
+                                id = rs.getObject("id", UUID::class.java),
+                                name = rs.getString("name"),
+                                statPace = rs.getInt("stat_pace"),
+                                currentAge = rs.getInt("current_age"),
+                                morale = rs.getInt("morale"),
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun readMarketTeams(conn: Connection): List<MarketTeam> {
+        // open_seats = SEATS_PER_TEAM (2) - current non-retired racing drivers.
+        // Negative results (over-stuffed) are clamped to 0; shouldn't happen
+        // unless something else has gone wrong but be defensive.
+        return conn.prepareStatement(
+            """
+            SELECT t.id, t.name, t.prestige, t.season_points,
+                   GREATEST(0, $SEATS_PER_TEAM - COALESCE(driver_count.cnt, 0)) AS open_seats
+              FROM teams t
+              LEFT JOIN (
+                  SELECT current_racing_team_id, COUNT(*) AS cnt
+                    FROM drivers
+                   WHERE NOT retired
+                     AND current_racing_team_id IS NOT NULL
+                   GROUP BY current_racing_team_id
+              ) driver_count ON driver_count.current_racing_team_id = t.id
+             WHERE t.series = 'F1'
+             ORDER BY t.id ASC
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            MarketTeam(
+                                id = rs.getString("id"),
+                                name = rs.getString("name"),
+                                prestige = rs.getInt("prestige"),
+                                seasonPoints = rs.getInt("season_points"),
+                                openSeats = rs.getInt("open_seats"),
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun resolveMarketRounds(
+        freeAgents: MutableList<MarketAgent>,
+        marketTeams: MutableList<MarketTeam>,
+        rng: Random,
+        endingSeasonYear: Int,
+    ): List<MarketSigning> {
+        val signings = mutableListOf<MarketSigning>()
+
+        for (round in 1..MARKET_ROUNDS) {
+            val topKForMutual = topKForRound(round)
+            val teamsWithSeats = marketTeams
+                .filter { it.openSeats > 0 }
+                .sortedWith(
+                    compareByDescending<MarketTeam> { it.prestige }
+                        .thenBy { it.id }
+                )
+
+            if (teamsWithSeats.isEmpty() || freeAgents.isEmpty()) break
+
+            for (team in teamsWithSeats) {
+                // Try to fill this team's open seats this round.
+                while (team.openSeats > 0 && freeAgents.isNotEmpty()) {
+                    // Team's top pick from current free-agent pool.
+                    val candidate = freeAgents
+                        .map { it to teamScore(team, it, rng) }
+                        .maxWithOrNull(
+                            compareBy<Pair<MarketAgent, Double>> { it.second }
+                                .thenBy { it.first.name }  // stable tiebreak
+                        )?.first ?: break
+
+                    // Candidate's preference ranking over currently-open teams.
+                    val candidateRanking = marketTeams
+                        .filter { it.openSeats > 0 }
+                        .map { it to driverScore(candidate, it, rng) }
+                        .sortedWith(
+                            compareByDescending<Pair<MarketTeam, Double>> { it.second }
+                                .thenBy { it.first.id }
+                        )
+                        .map { it.first }
+
+                    val mutualOk = candidateRanking
+                        .take(topKForMutual)
+                        .any { it.id == team.id }
+
+                    if (mutualOk) {
+                        signings += MarketSigning(
+                            agent = candidate,
+                            team = team,
+                            salary = computeSignedSalary(candidate, team),
+                            expiresYear = endingSeasonYear + CONTRACT_LENGTH_YEARS,
+                        )
+                        freeAgents.remove(candidate)
+                        team.openSeats -= 1
+                    } else {
+                        // Top candidate doesn't want this team this round.
+                        // Yield to the next team in prestige order — this team's
+                        // remaining seats wait until a later round when its
+                        // standards (or the driver pool) widen.
+                        break
+                    }
+                }
+            }
+        }
+
+        return signings
+    }
+
+    private fun applyMarketSignings(
+        conn: Connection,
+        signings: List<MarketSigning>,
+        endingSeasonYear: Int,
+    ) {
+        conn.prepareStatement(
+            """
+            UPDATE drivers SET
+              current_racing_team_id = ?,
+              contract_expires_year = ?,
+              contract_expires_round = ?,
+              current_salary = ?
+             WHERE id = ?
+            """.trimIndent()
+        ).use { stmt ->
+            signings.forEach { s ->
+                stmt.setString(1, s.team.id)
+                stmt.setInt(2, s.expiresYear)
+                stmt.setInt(3, CONTRACT_END_ROUND)
+                stmt.setLong(4, s.salary)
+                stmt.setObject(5, s.agent.id)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        }
+
+        logEvents(
+            conn, endingSeasonYear,
+            signings.map { s ->
+                EventToLog(
+                    "MARKET_SIGNING", "DRIVER", s.agent.id.toString(), s.agent.name,
+                    "${s.agent.name} → ${s.team.name} (pace ${s.agent.statPace}, age ${s.agent.currentAge}): " +
+                        "${CONTRACT_LENGTH_YEARS}yr contract through ${s.expiresYear} at \$${s.salary}/yr",
+                )
+            },
+        )
+
+        log.info(
+            "Driver market: {} signings applied (off-season ending {})",
+            signings.size, endingSeasonYear,
+        )
+    }
+
+    /**
+     * Team's preference score for a candidate driver.
+     *
+     *   skill   : pace, the dominant term
+     *   ageOpt  : symmetric penalty around 27 (peak racing years)
+     *   morale  : slight bonus for happy drivers
+     *   noise   : RNG spice for variety; magnitude tuned to be ~10% of skill
+     */
+    private fun teamScore(team: MarketTeam, agent: MarketAgent, rng: Random): Double {
+        val skill = (agent.statPace - 50).toDouble()
+        val ageOpt = -kotlin.math.abs(agent.currentAge - 27).toDouble()
+        val morale = (agent.morale - 50).toDouble()
+        val noise = rng.nextDouble() * 10.0
+        // Reference team — unused for v1 but keeps the signature future-proof
+        // for prestige-modulated scouting (e.g. top teams have wider scouting).
+        @Suppress("UNUSED_PARAMETER") team
+        return skill * 0.7 + ageOpt * 0.5 + morale * 0.2 + noise
+    }
+
+    /**
+     * Driver's preference score for a team.
+     *
+     *   prestige   : the dominant term — drivers chase top teams
+     *   performance: recent results (just-ended season's points)
+     *   noise      : RNG spice
+     */
+    private fun driverScore(agent: MarketAgent, team: MarketTeam, rng: Random): Double {
+        @Suppress("UNUSED_PARAMETER") agent  // reserved for loyalty / nationality matching
+        val prestige = (team.prestige - 50).toDouble()
+        // 20-pts-per-unit normalizer: P1-grade ~500 pts → +25; P5 ~50 pts → +2.5.
+        val performance = team.seasonPoints / 20.0
+        val noise = rng.nextDouble() * 5.0
+        return prestige * 0.6 + performance * 0.3 + noise
+    }
+
+    private fun computeSignedSalary(agent: MarketAgent, team: MarketTeam): Long {
+        // Same banding as computeDerivedSeedValues, scaled by team prestige.
+        // Top-team factor (~1.27 at prestige 95) vs bottom-team (~0.53 at 40)
+        // gives a 2.4× spread for the same driver depending on team — drives
+        // the prestige-pulls-talent dynamic.
+        val base = when {
+            agent.statPace >= 90 -> 20_000_000L
+            agent.statPace >= 80 -> 8_000_000L
+            agent.statPace >= 70 -> 2_000_000L
+            else -> 500_000L
+        }
+        val prestigeFactor = team.prestige / 75.0
+        return (base * prestigeFactor).toLong()
+    }
+
+    private fun topKForRound(round: Int): Int = when (round) {
+        1 -> 3
+        2 -> 5
+        else -> 10
+    }
+
+    // ------------------------------------------------------------------
+    // Step 6: Sponsor revenue tick (PRE_SEASON)
     // ------------------------------------------------------------------
 
     private fun applySponsorRevenueTick(conn: Connection, seasonYear: Int): Int {
@@ -711,7 +1037,7 @@ class OffSeasonService(private val db: Database) {
     }
 
     // ------------------------------------------------------------------
-    // Step 6: Operating cost tick (PRE_SEASON)
+    // Step 7: Operating cost tick (PRE_SEASON)
     // ------------------------------------------------------------------
 
     /**
@@ -864,5 +1190,11 @@ class OffSeasonService(private val db: Database) {
 
     private companion object {
         const val RETIRE_SALT = 0x4E71_4E72_4E73_4E74L
+        const val MARKET_SALT = 0x6D61_726B_6574_5341L  // "mrketSA" — distinct from RETIRE_SALT
+
+        const val MARKET_ROUNDS = 3
+        const val SEATS_PER_TEAM = 2
+        const val CONTRACT_LENGTH_YEARS = 2
+        const val CONTRACT_END_ROUND = 24
     }
 }
