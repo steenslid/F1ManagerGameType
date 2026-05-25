@@ -21,6 +21,7 @@ import java.util.UUID
  *   pu_versions (FK to engine_suppliers)
  *   drivers (FKs to teams)
  *   personnel (FK to teams)
+ *   team_sponsorships (FKs to teams + sponsors)
  */
 class SeedLoader {
 
@@ -43,6 +44,7 @@ class SeedLoader {
         loadPuVersions(conn)
         loadDrivers(conn)
         loadPersonnel(conn)
+        loadTeamSponsorships(conn)
         log.info("Seeding complete")
     }
 
@@ -370,6 +372,67 @@ class SeedLoader {
             stmt.executeBatch()
         }
         log.info("  personnel: {} rows", items.size)
+    }
+
+    /**
+     * Initial sponsorship grid for the 2026 starting state. Hardcoded rather
+     * than JSON-driven because values are tuned per (team, sponsor) and grow
+     * with the team roster. When the sponsor market lands, this is the
+     * starting state it inherits.
+     *
+     * Convention: each F1 team has 1 title deal + 2-3 lower-tier deals.
+     * All deals run 2026-2027 (two-year contracts) so the first END_OF_SEASON
+     * doesn't expire everything.
+     */
+    private fun loadTeamSponsorships(conn: Connection) {
+        // (team_id, sponsor_id, annual_value, is_title) — start/end years
+        // are 2026-2027 for the whole seed.
+        val deals = listOf(
+            // Scuderia Rossa — top-prestige Italian team
+            Triple("scuderia-rossa", "atlas-fintech", 90_000_000L) to true,
+            Triple("scuderia-rossa", "vesper-watches", 35_000_000L) to false,
+            Triple("scuderia-rossa", "orbit-telecom", 28_000_000L) to false,
+
+            // Silberpfeile — top-prestige German team
+            Triple("silberpfeile", "stratos-energy", 95_000_000L) to true,
+            Triple("silberpfeile", "polaris-cloud", 40_000_000L) to false,
+            Triple("silberpfeile", "meridian-oils", 15_000_000L) to false,
+
+            // Energy Racing — Austrian, has its own beverage tie-in IRL
+            Triple("energy-racing", "kairos-air", 85_000_000L) to true,
+            Triple("energy-racing", "polaris-cloud", 32_000_000L) to false,
+            Triple("energy-racing", "axiom-tools", 12_000_000L) to false,
+
+            // Papaya Racing — British mid-pack
+            Triple("papaya-racing", "vesper-watches", 30_000_000L) to true,
+            Triple("papaya-racing", "northwind-logistics", 14_000_000L) to false,
+            Triple("papaya-racing", "horizon-batteries", 4_500_000L) to false,
+
+            // Albion GP — lowest-prestige seed, smaller deals
+            Triple("albion-gp", "crestwell-foods", 4_500_000L) to true,
+            Triple("albion-gp", "vector-apparel", 5_000_000L) to false,
+            Triple("albion-gp", "horizon-batteries", 4_000_000L) to false,
+        )
+
+        val sql = """
+            INSERT INTO team_sponsorships
+              (team_id, sponsor_id, start_year, end_year, annual_value, is_title)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """.trimIndent()
+        conn.prepareStatement(sql).use { stmt ->
+            deals.forEach { (triple, isTitle) ->
+                val (teamId, sponsorId, annualValue) = triple
+                stmt.setString(1, teamId)
+                stmt.setString(2, sponsorId)
+                stmt.setInt(3, 2026)
+                stmt.setInt(4, 2027)
+                stmt.setLong(5, annualValue)
+                stmt.setBoolean(6, isTitle)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        }
+        log.info("  team_sponsorships: {} rows", deals.size)
     }
 
     private fun <T> readSeed(fileName: String, elementSerializer: KSerializer<T>): List<T> {

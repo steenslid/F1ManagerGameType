@@ -347,14 +347,6 @@ CREATE TABLE race_strategy (
 
 CREATE INDEX race_strategy_driver_idx ON race_strategy (driver_id);
 
--- ============================================================================
--- Off-season events
--- One row per thing-that-happened during off-season processing.
--- event_type values: FINANCE_SETTLED, AGE_TICK, STAT_DRIFT, RETIREMENT
--- subject_kind: DRIVER, PERSONNEL, TEAM
--- subject_id: UUID or TEXT depending on kind (stored as TEXT for simplicity)
--- ============================================================================
-
 CREATE TABLE off_season_events (
     id              BIGSERIAL    PRIMARY KEY,
     season_year     INT          NOT NULL,
@@ -366,7 +358,7 @@ CREATE TABLE off_season_events (
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
 
     CONSTRAINT off_season_event_type_valid CHECK (event_type IN (
-        'FINANCE_SETTLED','AGE_TICK','STAT_DRIFT','RETIREMENT'
+        'FINANCE_SETTLED','AGE_TICK','STAT_DRIFT','RETIREMENT','SPONSOR_REVENUE'
     )),
     CONSTRAINT off_season_subject_kind_valid CHECK (subject_kind IN (
         'DRIVER','PERSONNEL','TEAM'
@@ -375,3 +367,30 @@ CREATE TABLE off_season_events (
 
 CREATE INDEX off_season_events_season_idx ON off_season_events (season_year);
 CREATE INDEX off_season_events_subject_idx ON off_season_events (subject_kind, subject_id);
+
+-- ============================================================================
+-- Team sponsorships
+-- Many-to-many between teams and sponsors with an active year window.
+-- A sponsorship is active if start_year <= year <= end_year (inclusive).
+-- annual_value is what the sponsor pays the team each year of the contract.
+-- is_title flags the team's title sponsor (at most one expected per team
+-- per year; not enforced at DB level in v1).
+-- ============================================================================
+
+CREATE TABLE team_sponsorships (
+    id              BIGSERIAL    PRIMARY KEY,
+    team_id         TEXT         NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    sponsor_id      TEXT         NOT NULL REFERENCES sponsors(id) ON DELETE RESTRICT,
+    start_year      INT          NOT NULL,
+    end_year        INT          NOT NULL,
+    annual_value    BIGINT       NOT NULL,
+    is_title        BOOLEAN      NOT NULL DEFAULT FALSE,
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+
+    CONSTRAINT team_sponsorships_years_valid CHECK (end_year >= start_year),
+    CONSTRAINT team_sponsorships_value_nonneg CHECK (annual_value >= 0)
+);
+
+CREATE INDEX team_sponsorships_team_idx ON team_sponsorships (team_id);
+CREATE INDEX team_sponsorships_sponsor_idx ON team_sponsorships (sponsor_id);
+CREATE INDEX team_sponsorships_active_idx ON team_sponsorships (start_year, end_year);

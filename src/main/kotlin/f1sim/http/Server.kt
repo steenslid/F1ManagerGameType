@@ -18,6 +18,7 @@ import f1sim.http.routes.SaveRoutes
 import f1sim.http.routes.SponsorRoutes
 import f1sim.http.routes.StandingsRoutes
 import f1sim.http.routes.TeamRoutes
+import f1sim.http.routes.TeamSponsorshipRoutes
 import f1sim.http.routes.TrackRoutes
 import f1sim.save.SaveService
 import io.javalin.Javalin
@@ -54,6 +55,7 @@ class Server(
         RaceWeekendRoutes(raceWeekendService).register(app)
         StandingsRoutes(standingsService).register(app)
         OffSeasonRoutes(db).register(app)
+        TeamSponsorshipRoutes(db).register(app)
         PowerUnitRoutes(db).register(app)
         SponsorRoutes(db).register(app)
         ReferenceRoutes(db).register(app)

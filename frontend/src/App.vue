@@ -4,6 +4,7 @@ import SavesPanel from './panels/SavesPanel.vue'
 import GamePanel from './panels/GamePanel.vue'
 import CalendarPanel from './panels/CalendarPanel.vue'
 import TeamsPanel from './panels/TeamsPanel.vue'
+import SponsorshipsPanel from './panels/SponsorshipsPanel.vue'
 import DriversPanel from './panels/DriversPanel.vue'
 import PracticePanel from './panels/PracticePanel.vue'
 import StrategyPanel from './panels/StrategyPanel.vue'
@@ -16,6 +17,7 @@ const tabs = [
   { id: 'game', label: 'Game', component: GamePanel },
   { id: 'calendar', label: 'Calendar', component: CalendarPanel },
   { id: 'teams', label: 'Teams', component: TeamsPanel },
+  { id: 'sponsorships', label: 'Sponsorships', component: SponsorshipsPanel },
   { id: 'drivers', label: 'Drivers', component: DriversPanel },
   { id: 'practice', label: 'Practice', component: PracticePanel },
   { id: 'strategy', label: 'Strategy', component: StrategyPanel },

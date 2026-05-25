@@ -73,6 +73,8 @@ export const api = {
   listEngineSuppliers: () => request('GET', '/api/engine-suppliers'),
   listPuVersions: (filter) => request('GET', '/api/pu-versions' + qs(filter)),
   listSponsors: (filter) => request('GET', '/api/sponsors' + qs(filter)),
+  listTeamSponsorships: (filter) =>
+    request('GET', '/api/team-sponsorships' + qs(filter)),
   listTyreCompounds: () => request('GET', '/api/tyre-compounds'),
   listRegulationEras: () => request('GET', '/api/regulation-eras'),
 }

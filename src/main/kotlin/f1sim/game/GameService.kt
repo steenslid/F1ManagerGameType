@@ -13,8 +13,9 @@ import kotlin.random.Random
 /**
  * Game-state orchestration.
  *
- * Practice focus / strategy: consumed by qualifying / race hooks.
- * Off-season pipeline: delegated to [OffSeasonService].
+ * Race-weekend hooks (qualifying, race, post-race) live here directly.
+ * Year-level hooks (END_OF_SEASON finance settle, OFF_SEASON aging/retirement,
+ * PRE_SEASON sponsor revenue) are delegated to [OffSeasonService].
  */
 class GameService(
     private val db: Database,
@@ -369,7 +370,7 @@ class GameService(
         to: GameState,
     ): List<TransitionEventDto> {
         return when (to.phase) {
-            Phase.PRE_SEASON -> emptyList()
+            Phase.PRE_SEASON -> runPreSeasonHook(conn, to)
             Phase.PRACTICE -> emptyList()
             Phase.QUALIFYING -> runQualifyingHook(conn, to)
             Phase.SPRINT_QUALIFYING -> emptyList()
@@ -378,8 +379,6 @@ class GameService(
             Phase.POST_RACE -> runPostRaceHook(conn, to)
             Phase.BETWEEN_ROUNDS -> emptyList()
             Phase.END_OF_SEASON -> runEndOfSeasonHook(conn, from)
-            // PhaseMachine increments the year in this transition; the ending
-            // season is `from.year`, not `to.year`. Read both for clarity.
             Phase.OFF_SEASON -> runOffSeasonHook(conn, from)
         }
     }
@@ -616,15 +615,27 @@ class GameService(
 
     private fun runOffSeasonHook(conn: Connection, from: GameState): List<TransitionEventDto> {
         val masterSeed = readMasterSeed(conn)
-        // from.year is the year that just ended (END_OF_SEASON year).
-        // PhaseMachine bumps year on this transition, so `to.year = from.year + 1`,
-        // but the season we're processing is `from.year`.
+        // from.year is the year that just ended.
         val count = offSeasonService.runOffSeasonHooks(conn, from.year, masterSeed)
         return if (count > 0) {
             listOf(
                 TransitionEventDto(
                     "OFF_SEASON_PROCESSED",
                     "$count off-season events (aging, retirements)",
+                ),
+            )
+        } else emptyList()
+    }
+
+    private fun runPreSeasonHook(conn: Connection, to: GameState): List<TransitionEventDto> {
+        // to.year is the new season we're starting (year already bumped in OFF_SEASON
+        // transition, but PRE_SEASON keeps the same year).
+        val count = offSeasonService.runPreSeasonHooks(conn, to.year)
+        return if (count > 0) {
+            listOf(
+                TransitionEventDto(
+                    "SPONSOR_REVENUE_APPLIED",
+                    "Sponsor revenue applied to $count teams for season ${to.year}",
                 ),
             )
         } else emptyList()

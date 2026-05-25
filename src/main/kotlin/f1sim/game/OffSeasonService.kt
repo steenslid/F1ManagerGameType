@@ -12,34 +12,31 @@ import kotlin.random.Random
 
 /**
  * Off-season pipeline. Per the design doc this has 11 ordered steps; v1
- * implements the first three:
+ * implements:
  *
- *   1. Finance settle (END_OF_SEASON) — apply year's income/expenses to
- *      cash_reserves, zero the YTD counters.
+ *   END_OF_SEASON hooks:
+ *     1. Finance settle — apply year's income/expenses to cash_reserves,
+ *        zero the YTD counters.
  *
- *   2. Aging tick (OFF_SEASON) — every non-retired driver and personnel
- *      gets +1 year. Drivers past their peak age lose stat_pace by
- *      (age - peak_age) * decline_rate, floored at 0.
+ *   OFF_SEASON hooks (the year just ended):
+ *     2. Aging tick — drivers and personnel +1 year, pace drift past peak.
+ *     3. Retirement rolls.
  *
- *   3. Retirement rolls (OFF_SEASON) — drivers above 32 roll against
- *      trait_retirement_threshold; personnel use an age-based curve.
- *      Retired entities lose team affiliations.
+ *   PRE_SEASON hooks (the new year about to start):
+ *     4. Sponsor revenue tick — sum active sponsorships per team, add to
+ *        current_year_income.
  *
- * Remaining 8 steps (contract expirations, markets, junior promotions,
- * sponsor refresh, regulation reset, board review, season setup, calendar
- * generation) are stubbed.
+ * Remaining steps stubbed: contract expirations, markets (driver/personnel/
+ * sponsor), junior promotions, regulation reset, board review, calendar
+ * generation.
  *
- * All hooks write to `off_season_events` for a readable history. The whole
- * pipeline runs inside the GameService advance transaction.
+ * All hooks write to `off_season_events` for the report. The whole pipeline
+ * runs inside the GameService advance transaction.
  */
 class OffSeasonService(private val db: Database) {
 
     private val log = LoggerFactory.getLogger(OffSeasonService::class.java)
 
-    /**
-     * Called from GameService when transitioning INTO END_OF_SEASON.
-     * Returns event count for the transition log.
-     */
     fun runEndOfSeasonHooks(conn: Connection, seasonYear: Int): Int {
         if (!hasSimulatedRaces(conn, seasonYear)) {
             log.info("Skipping END_OF_SEASON hooks for {} — no races simulated", seasonYear)
@@ -51,11 +48,6 @@ class OffSeasonService(private val db: Database) {
         return financeEvents
     }
 
-    /**
-     * Called from GameService when transitioning INTO OFF_SEASON.
-     * `endingSeasonYear` is the year that just ended (i.e. before the +1
-     * that the PhaseMachine does in END_OF_SEASON → OFF_SEASON).
-     */
     fun runOffSeasonHooks(conn: Connection, endingSeasonYear: Int, masterSeed: Long): Int {
         if (!hasSimulatedRaces(conn, endingSeasonYear)) {
             log.info("Skipping OFF_SEASON hooks for {} — no races simulated", endingSeasonYear)
@@ -72,12 +64,21 @@ class OffSeasonService(private val db: Database) {
         return total
     }
 
+    /**
+     * Called when transitioning INTO PRE_SEASON. The new year is starting;
+     * sum each team's active sponsorships and apply to current_year_income.
+     */
+    fun runPreSeasonHooks(conn: Connection, newSeasonYear: Int): Int {
+        val revenueEvents = applySponsorRevenueTick(conn, newSeasonYear)
+        log.info("PRE_SEASON {}: {} sponsor revenue events", newSeasonYear, revenueEvents)
+        return revenueEvents
+    }
+
     // ------------------------------------------------------------------
     // Step 1: Finance settle
     // ------------------------------------------------------------------
 
     private fun settleFinances(conn: Connection, seasonYear: Int): Int {
-        // Read each F1 team's current ledger, log, then apply.
         val updates = conn.prepareStatement(
             """
             SELECT id, name, cash_reserves, current_year_income, current_year_expenses
@@ -120,17 +121,14 @@ class OffSeasonService(private val db: Database) {
             stmt.executeBatch()
         }
 
-        // Log one event per team.
-        val message = { u: FinanceUpdate ->
-            val delta = u.income - u.expenses
-            val sign = if (delta >= 0) "+" else ""
-            "${u.teamName}: $$sign${delta} (income $${u.income}, expenses $${u.expenses}) " +
-                "→ cash $${u.newCash}"
-        }
         logEvents(
             conn, seasonYear,
-            updates.map {
-                EventToLog("FINANCE_SETTLED", "TEAM", it.teamId, it.teamName, message(it))
+            updates.map { u ->
+                val delta = u.income - u.expenses
+                val sign = if (delta >= 0) "+" else ""
+                val msg = "${u.teamName}: $sign$$delta (income $${u.income}, expenses $${u.expenses}) " +
+                    "→ cash $${u.newCash}"
+                EventToLog("FINANCE_SETTLED", "TEAM", u.teamId, u.teamName, msg)
             },
         )
 
@@ -158,7 +156,6 @@ class OffSeasonService(private val db: Database) {
     }
 
     private fun ageDrivers(conn: Connection, seasonYear: Int): Int {
-        // Read everyone first so we have the pre-change snapshot for the log.
         data class Row(
             val id: UUID, val name: String,
             val oldAge: Int, val newAge: Int,
@@ -209,8 +206,6 @@ class OffSeasonService(private val db: Database) {
             stmt.executeBatch()
         }
 
-        // One AGE_TICK event per driver, plus STAT_DRIFT events only for ones
-        // whose pace actually moved.
         val events = mutableListOf<EventToLog>()
         rows.forEach { r ->
             events += EventToLog(
@@ -454,16 +449,91 @@ class OffSeasonService(private val db: Database) {
         return retirees.size
     }
 
-    /**
-     * Personnel retirement curve: 5% at 60, ramping to 100% at 75.
-     * Below 60: 0%. Linear interpolation in between.
-     */
     private fun personnelRetirementThresholdAt(age: Int): Double {
         if (age < 60) return 0.0
         if (age >= 75) return 1.0
-        // 60 -> 0.05, 75 -> 1.0
         val t = (age - 60).toDouble() / (75 - 60)
         return min(1.0, 0.05 + t * 0.95)
+    }
+
+    // ------------------------------------------------------------------
+    // Step 4: Sponsor revenue tick (PRE_SEASON)
+    // ------------------------------------------------------------------
+
+    private fun applySponsorRevenueTick(conn: Connection, seasonYear: Int): Int {
+        data class TeamRevenue(
+            val teamId: String,
+            val teamName: String,
+            val dealCount: Int,
+            val totalRevenue: Long,
+            val oldIncome: Long,
+            val newIncome: Long,
+        )
+
+        val rows = conn.prepareStatement(
+            """
+            SELECT t.id AS team_id, t.name AS team_name,
+                   t.current_year_income AS old_income,
+                   COUNT(ts.id) AS deal_count,
+                   COALESCE(SUM(ts.annual_value), 0) AS total_revenue
+              FROM teams t
+              LEFT JOIN team_sponsorships ts
+                ON ts.team_id = t.id
+               AND ts.start_year <= ?
+               AND ts.end_year >= ?
+             WHERE t.series = 'F1'
+             GROUP BY t.id, t.name, t.current_year_income
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.setInt(1, seasonYear)
+            stmt.setInt(2, seasonYear)
+            stmt.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        val oldIncome = rs.getLong("old_income")
+                        val revenue = rs.getLong("total_revenue")
+                        add(
+                            TeamRevenue(
+                                teamId = rs.getString("team_id"),
+                                teamName = rs.getString("team_name"),
+                                dealCount = rs.getInt("deal_count"),
+                                totalRevenue = revenue,
+                                oldIncome = oldIncome,
+                                newIncome = oldIncome + revenue,
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        // Only update teams that actually have revenue this year.
+        val updates = rows.filter { it.totalRevenue > 0 }
+        if (updates.isEmpty()) return 0
+
+        conn.prepareStatement(
+            "UPDATE teams SET current_year_income = ? WHERE id = ?"
+        ).use { stmt ->
+            updates.forEach { u ->
+                stmt.setLong(1, u.newIncome)
+                stmt.setString(2, u.teamId)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        }
+
+        logEvents(
+            conn, seasonYear,
+            updates.map { u ->
+                EventToLog(
+                    "SPONSOR_REVENUE", "TEAM", u.teamId, u.teamName,
+                    "${u.teamName}: ${u.dealCount} active deals worth $${u.totalRevenue} " +
+                        "→ current_year_income $${u.newIncome}",
+                )
+            },
+        )
+
+        return updates.size
     }
 
     // ------------------------------------------------------------------
