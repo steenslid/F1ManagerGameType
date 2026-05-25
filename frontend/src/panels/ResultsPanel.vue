@@ -5,8 +5,10 @@ import { api } from '../api.js'
 const state = ref(null)
 const currentRace = ref(null)
 const currentResults = ref([])
+const currentSprintResults = ref([])
 const standings = ref(null)
 const seasonResults = ref([])
+const seasonSprintResults = ref([])
 
 const loading = ref(false)
 const error = ref(null)
@@ -16,6 +18,7 @@ async function refresh() {
   error.value = null
   currentRace.value = null
   currentResults.value = []
+  currentSprintResults.value = []
   try {
     const s = await api.getGameState()
     state.value = s.data
@@ -23,8 +26,12 @@ async function refresh() {
     try {
       const r = await api.getCurrentRace()
       currentRace.value = r.data
-      const rr = await api.listRaceResults({ race: r.data.raceId })
+      const [rr, sr] = await Promise.all([
+        api.listRaceResults({ race: r.data.raceId }),
+        api.listSprintResults({ race: r.data.raceId }),
+      ])
       currentResults.value = rr.data
+      currentSprintResults.value = sr.data
     } catch (e) {
       if (!String(e.message).startsWith('[NOT_FOUND]')) {
         throw e
@@ -34,8 +41,12 @@ async function refresh() {
     const st = await api.getStandings({ type: 'both', season: state.value.year })
     standings.value = st.data
 
-    const sr = await api.listRaceResults({ season: state.value.year })
-    seasonResults.value = sr.data
+    const [seasonRaceRes, seasonSprintRes] = await Promise.all([
+      api.listRaceResults({ season: state.value.year }),
+      api.listSprintResults({ season: state.value.year }),
+    ])
+    seasonResults.value = seasonRaceRes.data
+    seasonSprintResults.value = seasonSprintRes.data
   } catch (e) {
     error.value = e.message
   } finally {
@@ -43,14 +54,17 @@ async function refresh() {
   }
 }
 
-const currentRows = computed(() => {
-  return [...currentResults.value].sort((a, b) => {
+function sortByFinish(rows) {
+  return [...rows].sort((a, b) => {
     const af = a.finishingPosition ?? 999
     const bf = b.finishingPosition ?? 999
     if (af !== bf) return af - bf
     return (a.gridPosition ?? 999) - (b.gridPosition ?? 999)
   })
-})
+}
+
+const currentRows = computed(() => sortByFinish(currentResults.value))
+const currentSprintRows = computed(() => sortByFinish(currentSprintResults.value))
 
 function fmtPos(n) {
   return n == null ? '—' : n
@@ -84,38 +98,79 @@ onMounted(refresh)
           </span>
           <span class="pill">{{ currentRace.sessionFormat }}</span>
         </p>
-        <table v-if="currentRows.length">
-          <thead>
-            <tr>
-              <th class="numeric">Finish</th>
-              <th class="numeric">Grid</th>
-              <th>Driver</th>
-              <th>Team</th>
-              <th>Status</th>
-              <th class="numeric">Points</th>
-              <th>Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="r in currentRows" :key="r.driverId">
-              <td class="numeric"><strong>{{ fmtPos(r.finishingPosition) }}</strong></td>
-              <td class="numeric muted">{{ fmtPos(r.gridPosition) }}</td>
-              <td>{{ r.driverName }}</td>
-              <td>{{ r.teamName }}</td>
-              <td>
-                <span class="pill">{{ r.status }}</span>
-              </td>
-              <td class="numeric">{{ r.points.toFixed(0) }}</td>
-              <td>
-                <span v-if="r.pole" class="pill">POLE</span>
-                <span v-if="r.fastestLap" class="pill">FL</span>
-                <span v-if="r.dnfCause" class="muted">{{ r.dnfCause }}</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <p v-else class="muted">
-          No results yet for this race. Advance to QUALIFYING to generate the grid.
+
+        <div v-if="currentSprintRows.length">
+          <h3>Sprint</h3>
+          <table>
+            <thead>
+              <tr>
+                <th class="numeric">Finish</th>
+                <th class="numeric">Grid</th>
+                <th>Driver</th>
+                <th>Team</th>
+                <th>Status</th>
+                <th class="numeric">Points</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="r in currentSprintRows" :key="r.driverId">
+                <td class="numeric"><strong>{{ fmtPos(r.finishingPosition) }}</strong></td>
+                <td class="numeric muted">{{ fmtPos(r.gridPosition) }}</td>
+                <td>{{ r.driverName }}</td>
+                <td>{{ r.teamName }}</td>
+                <td><span class="pill">{{ r.status }}</span></td>
+                <td class="numeric">{{ r.points.toFixed(0) }}</td>
+                <td>
+                  <span v-if="r.pole" class="pill">SPRINT POLE</span>
+                  <span v-if="r.dnfCause" class="muted">{{ r.dnfCause }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div v-if="currentRows.length">
+          <h3 v-if="currentSprintRows.length">Race</h3>
+          <table>
+            <thead>
+              <tr>
+                <th class="numeric">Finish</th>
+                <th class="numeric">Grid</th>
+                <th>Driver</th>
+                <th>Team</th>
+                <th>Status</th>
+                <th class="numeric">Points</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="r in currentRows" :key="r.driverId">
+                <td class="numeric"><strong>{{ fmtPos(r.finishingPosition) }}</strong></td>
+                <td class="numeric muted">{{ fmtPos(r.gridPosition) }}</td>
+                <td>{{ r.driverName }}</td>
+                <td>{{ r.teamName }}</td>
+                <td>
+                  <span class="pill">{{ r.status }}</span>
+                </td>
+                <td class="numeric">{{ r.points.toFixed(0) }}</td>
+                <td>
+                  <span v-if="r.pole" class="pill">POLE</span>
+                  <span v-if="r.fastestLap" class="pill">FL</span>
+                  <span v-if="r.dnfCause" class="muted">{{ r.dnfCause }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p v-if="!currentRows.length && !currentSprintRows.length" class="muted">
+          No results yet for this weekend.
+          {{
+            currentRace.sessionFormat === 'SPRINT'
+              ? 'Advance to SPRINT_QUALIFYING to start.'
+              : 'Advance to QUALIFYING to generate the grid.'
+          }}
         </p>
       </div>
     </section>
@@ -170,11 +225,15 @@ onMounted(refresh)
       </table>
     </section>
 
-    <section v-if="!loading && seasonResults.length">
-      <h3>All season results ({{ seasonResults.length }} rows)</h3>
+    <section v-if="!loading && (seasonResults.length || seasonSprintResults.length)">
+      <h3>All season results ({{ seasonResults.length }} race rows, {{ seasonSprintResults.length }} sprint rows)</h3>
       <details>
-        <summary>Raw season result rows</summary>
+        <summary>Raw race result rows</summary>
         <pre>{{ JSON.stringify(seasonResults, null, 2) }}</pre>
+      </details>
+      <details v-if="seasonSprintResults.length">
+        <summary>Raw sprint result rows</summary>
+        <pre>{{ JSON.stringify(seasonSprintResults, null, 2) }}</pre>
       </details>
     </section>
   </div>

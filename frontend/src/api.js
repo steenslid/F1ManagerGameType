@@ -66,6 +66,7 @@ export const api = {
   // Resources
   listRaces: (filter) => request('GET', '/api/races' + qs(filter)),
   listRaceResults: (filter) => request('GET', '/api/race-results' + qs(filter)),
+  listSprintResults: (filter) => request('GET', '/api/sprint-results' + qs(filter)),
   listTeams: (filter) => request('GET', '/api/teams' + qs(filter)),
   listDrivers: (filter) => request('GET', '/api/drivers' + qs(filter)),
   listPersonnel: (filter) => request('GET', '/api/personnel' + qs(filter)),

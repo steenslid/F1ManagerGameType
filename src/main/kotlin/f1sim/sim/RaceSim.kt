@@ -15,12 +15,17 @@ import kotlin.random.Random
  *
  * v1 models:
  *   Qualifying: stat_qualifying + gaussian noise. Sort, assign grid.
+ *               Reused for sprint qualifying — same mechanics, separate caller
+ *               and salt give a different grid.
  *   Race:       stat_pace + grid_bonus + strategy_pace_bonus
  *               + noise scaled by (consistency, strategy variance).
  *               DNFs roll first, finishers sort by score.
  *               Fastest lap: weighted pick from finishers in top 5.
  *               Points: FIA table; +1 for fastest lap when rules allow
  *               and driver is in top 10.
+ *   Sprint:     like Race but no strategy effects (no mandatory stops),
+ *               no fastest lap, halved DNF probability (shorter race),
+ *               points 8-7-6-5-4-3-2-1 for top 8.
  */
 object RaceSim {
 
@@ -198,6 +203,95 @@ object RaceSim {
 
         return finisherResults + dnfResults
     }
+
+    // -- Sprint --------------------------------------------------------
+
+    /** Halved compared to a full race — sprints are ~100km, ~1/3 of a GP. */
+    private const val SPRINT_DNF_BASE_PROB = 0.02
+
+    /** Sprint points: 8-7-6-5-4-3-2-1 for top 8. */
+    private val SPRINT_POINTS = listOf(8, 7, 6, 5, 4, 3, 2, 1)
+
+    data class SprintEntrant(
+        val driverId: UUID,
+        val teamId: String,
+        val gridPosition: Int,
+        val statPace: Double,
+        val statConsistency: Int,
+    )
+
+    data class SprintResult(
+        val driverId: UUID,
+        val teamId: String,
+        val finishingPosition: Int?,
+        val points: Double,
+        val status: String,
+        val dnfCause: String?,
+    )
+
+    /**
+     * Sprint race. Differences from [simulateRace]:
+     *   - DNF probability halved (shorter race, less time for things to break)
+     *   - No strategy archetype effects (sprints have no mandatory stops)
+     *   - No fastest-lap mechanic
+     *   - Points table is 8-7-6-5-4-3-2-1 top 8
+     *
+     * Same grid bonus, same gaussian noise scaled by consistency.
+     */
+    fun simulateSprint(
+        entrants: List<SprintEntrant>,
+        rng: Random,
+    ): List<SprintResult> {
+        require(entrants.isNotEmpty()) { "sprint needs at least one entrant" }
+
+        // 1. DNF roll, halved base prob.
+        val (finishers, dnfs) = entrants.partition { e ->
+            val consistencyFactor = (50.0 / max(e.statConsistency, 25))
+            val dnfProb = SPRINT_DNF_BASE_PROB * consistencyFactor
+            rng.nextDouble() >= dnfProb
+        }
+
+        // 2. Score finishers — same as race but no strategy term.
+        val finishersScored = finishers.map { e ->
+            val gridBonus = gridBonus(e.gridPosition)
+            val sigma = RACE_PACE_SIGMA * (50.0 / max(e.statConsistency, 25))
+            val noise = rng.gaussian() * sigma
+            val score = e.statPace + gridBonus + noise
+            e to score
+        }.sortedByDescending { (_, score) -> score }
+
+        val finishingOrder = finishersScored.mapIndexed { index, (e, _) -> e to (index + 1) }
+
+        // 3. Assemble results — no fastest lap, sprint points table.
+        val finisherResults = finishingOrder.map { (e, pos) ->
+            val points = if (pos <= SPRINT_POINTS.size) {
+                SPRINT_POINTS[pos - 1].toDouble()
+            } else 0.0
+            SprintResult(
+                driverId = e.driverId,
+                teamId = e.teamId,
+                finishingPosition = pos,
+                points = points,
+                status = "FINISHED",
+                dnfCause = null,
+            )
+        }
+
+        val dnfResults = dnfs.map { e ->
+            SprintResult(
+                driverId = e.driverId,
+                teamId = e.teamId,
+                finishingPosition = null,
+                points = 0.0,
+                status = "DNF",
+                dnfCause = DNF_CAUSES[rng.nextInt(DNF_CAUSES.size)],
+            )
+        }
+
+        return finisherResults + dnfResults
+    }
+
+    // -- Shared helpers ------------------------------------------------
 
     private fun gridBonus(gridPosition: Int): Double {
         if (gridPosition < 1) return 0.0

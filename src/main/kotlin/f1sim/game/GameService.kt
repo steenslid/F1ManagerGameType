@@ -13,9 +13,10 @@ import kotlin.random.Random
 /**
  * Game-state orchestration.
  *
- * Race-weekend hooks (qualifying, race, post-race) live here directly.
- * Year-level hooks (END_OF_SEASON finance settle, OFF_SEASON aging/retirement,
- * PRE_SEASON sponsor revenue) are delegated to [OffSeasonService].
+ * Race-weekend hooks (qualifying, race, sprint qualifying, sprint, post-race)
+ * live here directly. Year-level hooks (END_OF_SEASON finance settle,
+ * OFF_SEASON aging/retirement, PRE_SEASON sponsor revenue) are delegated to
+ * [OffSeasonService].
  */
 class GameService(
     private val db: Database,
@@ -373,8 +374,8 @@ class GameService(
             Phase.PRE_SEASON -> runPreSeasonHook(conn, to)
             Phase.PRACTICE -> emptyList()
             Phase.QUALIFYING -> runQualifyingHook(conn, to)
-            Phase.SPRINT_QUALIFYING -> emptyList()
-            Phase.SPRINT -> emptyList()
+            Phase.SPRINT_QUALIFYING -> runSprintQualifyingHook(conn, to)
+            Phase.SPRINT -> runSprintHook(conn, to)
             Phase.RACE -> runRaceHook(conn, to)
             Phase.POST_RACE -> runPostRaceHook(conn, to)
             Phase.BETWEEN_ROUNDS -> emptyList()
@@ -390,40 +391,7 @@ class GameService(
                 return emptyList()
             }
 
-        val entrants = conn.prepareStatement(
-            """
-            SELECT d.id, d.current_racing_team_id, d.stat_qualifying,
-                   pf.focus AS focus
-              FROM drivers d
-              JOIN teams t ON t.id = d.current_racing_team_id
-              LEFT JOIN practice_focus pf
-                ON pf.driver_id = d.id AND pf.race_id = ?
-             WHERE NOT d.retired
-               AND t.series = 'F1'
-            """.trimIndent()
-        ).use { stmt ->
-            stmt.setObject(1, raceId)
-            stmt.executeQuery().use { rs ->
-                buildList {
-                    while (rs.next()) {
-                        val baseStat = rs.getInt("stat_qualifying").toDouble()
-                        val focus = rs.getString("focus")
-                        val effectiveStat = if (focus == "SETUP") {
-                            baseStat * setupBonusMultiplier
-                        } else {
-                            baseStat
-                        }
-                        add(
-                            RaceSim.QualifyingEntrant(
-                                driverId = rs.getObject("id", UUID::class.java),
-                                teamId = rs.getString("current_racing_team_id"),
-                                statQualifying = effectiveStat,
-                            )
-                        )
-                    }
-                }
-            }
-        }
+        val entrants = readQualifyingEntrants(conn, raceId)
 
         if (entrants.isEmpty()) {
             log.warn("No entrants found for qualifying — skipping")
@@ -574,21 +542,236 @@ class GameService(
         return events
     }
 
+    // -- Sprint hooks -------------------------------------------------
+
+    /**
+     * Sprint qualifying. Uses the same model as full qualifying (same noise,
+     * same setup focus effect), just a different salt so the resulting grid
+     * is uncorrelated with main qualifying. Writes the sprint grid to
+     * `sprint_results`.
+     */
+    private fun runSprintQualifyingHook(conn: Connection, state: GameState): List<TransitionEventDto> {
+        val (raceId, masterSeed) = lookupRaceAndSeed(conn, state.year, state.round)
+            ?: run {
+                log.warn("No race for y{} r{} — skipping sprint qualifying", state.year, state.round)
+                return emptyList()
+            }
+
+        val entrants = readQualifyingEntrants(conn, raceId)
+
+        if (entrants.isEmpty()) {
+            log.warn("No entrants found for sprint qualifying — skipping")
+            return listOf(
+                TransitionEventDto("SPRINT_QUALIFYING_SKIPPED", "No drivers eligible"),
+            )
+        }
+
+        val rng = Random(masterSeed xor raceId.hashCode().toLong() xor SPRINT_QUALIFYING_SALT)
+        val results = RaceSim.simulateQualifying(entrants, rng)
+
+        conn.prepareStatement("DELETE FROM sprint_results WHERE race_id = ?").use { stmt ->
+            stmt.setObject(1, raceId)
+            stmt.executeUpdate()
+        }
+        conn.prepareStatement(
+            """
+            INSERT INTO sprint_results
+              (race_id, driver_id, team_id, grid_position, status, pole)
+            VALUES (?, ?, ?, ?, 'QUALIFIED', ?)
+            """.trimIndent()
+        ).use { stmt ->
+            results.forEach { r ->
+                stmt.setObject(1, raceId)
+                stmt.setObject(2, r.driverId)
+                stmt.setString(3, r.teamId)
+                stmt.setInt(4, r.gridPosition)
+                stmt.setBoolean(5, r.pole)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        }
+
+        log.info("Sprint qualifying simulated for race {}: {} entrants", raceId, results.size)
+        return listOf(
+            TransitionEventDto(
+                "SPRINT_QUALIFYING_COMPLETED",
+                "${results.size} drivers qualified for sprint y${state.year} r${state.round}",
+            ),
+        )
+    }
+
+    /**
+     * Runs the sprint race. Reads the sprint grid from `sprint_results` (set
+     * by `runSprintQualifyingHook`), simulates, writes finishing positions and
+     * sprint_points back to the same row.
+     */
+    private fun runSprintHook(conn: Connection, state: GameState): List<TransitionEventDto> {
+        val (raceId, masterSeed) = lookupRaceAndSeed(conn, state.year, state.round)
+            ?: run {
+                log.warn("No race for y{} r{} — skipping sprint sim", state.year, state.round)
+                return emptyList()
+            }
+
+        val entrants = conn.prepareStatement(
+            """
+            SELECT sr.driver_id, sr.team_id, sr.grid_position,
+                   d.stat_pace, d.stat_consistency
+              FROM sprint_results sr
+              JOIN drivers d ON d.id = sr.driver_id
+             WHERE sr.race_id = ?
+               AND sr.status = 'QUALIFIED'
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.setObject(1, raceId)
+            stmt.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            RaceSim.SprintEntrant(
+                                driverId = rs.getObject("driver_id", UUID::class.java),
+                                teamId = rs.getString("team_id"),
+                                gridPosition = rs.getInt("grid_position"),
+                                statPace = rs.getInt("stat_pace").toDouble(),
+                                statConsistency = rs.getInt("stat_consistency"),
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        if (entrants.isEmpty()) {
+            log.warn("No grid found for sprint {} — skipping sprint sim", raceId)
+            return listOf(TransitionEventDto("SPRINT_SKIPPED", "No grid; was sprint qualifying run?"))
+        }
+
+        val rng = Random(masterSeed xor raceId.hashCode().toLong() xor SPRINT_SALT)
+        val results = RaceSim.simulateSprint(entrants, rng)
+
+        conn.prepareStatement(
+            """
+            UPDATE sprint_results SET
+              finishing_position = ?,
+              sprint_points = ?,
+              status = ?,
+              dnf_cause = ?
+             WHERE race_id = ? AND driver_id = ?
+            """.trimIndent()
+        ).use { stmt ->
+            results.forEach { r ->
+                if (r.finishingPosition != null) {
+                    stmt.setInt(1, r.finishingPosition)
+                } else {
+                    stmt.setNull(1, java.sql.Types.INTEGER)
+                }
+                stmt.setDouble(2, r.points)
+                stmt.setString(3, r.status)
+                if (r.dnfCause != null) {
+                    stmt.setString(4, r.dnfCause)
+                } else {
+                    stmt.setNull(4, java.sql.Types.VARCHAR)
+                }
+                stmt.setObject(5, raceId)
+                stmt.setObject(6, r.driverId)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        }
+
+        val dnfCount = results.count { it.status == "DNF" }
+        val finisherCount = results.size - dnfCount
+        log.info("Sprint simulated for {}: {} finishers, {} DNFs", raceId, finisherCount, dnfCount)
+        val events = mutableListOf(
+            TransitionEventDto(
+                "SPRINT_COMPLETED",
+                "$finisherCount finishers, $dnfCount DNFs at sprint y${state.year} r${state.round}",
+            ),
+        )
+        results.firstOrNull { it.finishingPosition == 1 }?.let { winner ->
+            events += TransitionEventDto("SPRINT_WINNER", "Driver ${winner.driverId} won sprint")
+        }
+        return events
+    }
+
+    /**
+     * Shared entrant builder for both qualifying and sprint qualifying:
+     * F1-series drivers with a current team, plus SETUP focus multiplier on
+     * stat_qualifying. The `practice_focus` table is keyed on (race, driver)
+     * — set once during PRACTICE, applies to both qualifying sessions on a
+     * sprint weekend.
+     */
+    private fun readQualifyingEntrants(
+        conn: Connection,
+        raceId: UUID,
+    ): List<RaceSim.QualifyingEntrant> {
+        return conn.prepareStatement(
+            """
+            SELECT d.id, d.current_racing_team_id, d.stat_qualifying,
+                   pf.focus AS focus
+              FROM drivers d
+              JOIN teams t ON t.id = d.current_racing_team_id
+              LEFT JOIN practice_focus pf
+                ON pf.driver_id = d.id AND pf.race_id = ?
+             WHERE NOT d.retired
+               AND t.series = 'F1'
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.setObject(1, raceId)
+            stmt.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        val baseStat = rs.getInt("stat_qualifying").toDouble()
+                        val focus = rs.getString("focus")
+                        val effectiveStat = if (focus == "SETUP") {
+                            baseStat * setupBonusMultiplier
+                        } else {
+                            baseStat
+                        }
+                        add(
+                            RaceSim.QualifyingEntrant(
+                                driverId = rs.getObject("id", UUID::class.java),
+                                teamId = rs.getString("current_racing_team_id"),
+                                statQualifying = effectiveStat,
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Recompute `teams.season_points` from race + sprint results for the
+     * current season. Runs at POST_RACE, so the cache is correct after each
+     * complete race weekend (sprint or standard).
+     *
+     * Note: between SPRINT and RACE on a sprint weekend, the cache is stale
+     * w.r.t. the just-completed sprint. /api/standings computes live from
+     * the same source tables so it's always correct.
+     */
     private fun runPostRaceHook(conn: Connection, state: GameState): List<TransitionEventDto> {
         val updated = conn.prepareStatement(
             """
             UPDATE teams t SET season_points = COALESCE(s.total, 0)
               FROM (
-                  SELECT rr.team_id, SUM(rr.points) AS total
-                    FROM race_results rr
-                    JOIN races r ON r.id = rr.race_id
-                   WHERE r.season_year = ?
-                   GROUP BY rr.team_id
+                  SELECT team_id, SUM(points) AS total FROM (
+                      SELECT rr.team_id, rr.points
+                        FROM race_results rr
+                        JOIN races r ON r.id = rr.race_id
+                       WHERE r.season_year = ?
+                      UNION ALL
+                      SELECT sr.team_id, sr.sprint_points AS points
+                        FROM sprint_results sr
+                        JOIN races r ON r.id = sr.race_id
+                       WHERE r.season_year = ?
+                  ) AS combined
+                  GROUP BY team_id
               ) s
              WHERE t.id = s.team_id
             """.trimIndent()
         ).use { stmt ->
             stmt.setInt(1, state.year)
+            stmt.setInt(2, state.year)
             stmt.executeUpdate()
         }
 
@@ -667,5 +850,7 @@ class GameService(
     private companion object {
         const val QUALIFYING_SALT = 0x5111EFA11L
         const val RACE_SALT = 0xACE0FA10L
+        const val SPRINT_QUALIFYING_SALT = 0x5111EFB22L
+        const val SPRINT_SALT = 0xACE0FB21L
     }
 }

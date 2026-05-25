@@ -319,6 +319,38 @@ CREATE TABLE race_results (
 CREATE INDEX race_results_driver_idx ON race_results (driver_id);
 CREATE INDEX race_results_team_idx ON race_results (team_id);
 
+-- Sprint race results, separate from race_results because:
+--   * sprint and main race grid positions are independent (sprint quali ≠ main quali)
+--   * sprint awards a different points table (8-7-6-5-4-3-2-1 top 8)
+--   * no fastest-lap concept for sprints
+-- Only populated for race rows where session_format = 'SPRINT'.
+CREATE TABLE sprint_results (
+    race_id             UUID         NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+    driver_id           UUID         NOT NULL REFERENCES drivers(id) ON DELETE RESTRICT,
+    team_id             TEXT         NOT NULL REFERENCES teams(id) ON DELETE RESTRICT,
+
+    grid_position       INT,
+    finishing_position  INT,
+    sprint_points       NUMERIC(5,2) NOT NULL DEFAULT 0,
+    status              TEXT         NOT NULL DEFAULT 'QUALIFIED',
+    pole                BOOLEAN      NOT NULL DEFAULT FALSE,
+    dnf_cause           TEXT,
+
+    PRIMARY KEY (race_id, driver_id),
+    CONSTRAINT sprint_results_status_valid CHECK (status IN (
+        'QUALIFIED','FINISHED','DNF','DSQ','DNS'
+    )),
+    CONSTRAINT sprint_results_grid_valid CHECK (
+        grid_position IS NULL OR grid_position >= 1
+    ),
+    CONSTRAINT sprint_results_finishing_valid CHECK (
+        finishing_position IS NULL OR finishing_position >= 1
+    )
+);
+
+CREATE INDEX sprint_results_driver_idx ON sprint_results (driver_id);
+CREATE INDEX sprint_results_team_idx ON sprint_results (team_id);
+
 CREATE TABLE practice_focus (
     race_id     UUID         NOT NULL REFERENCES races(id) ON DELETE CASCADE,
     driver_id   UUID         NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
