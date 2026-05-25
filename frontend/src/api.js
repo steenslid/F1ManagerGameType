@@ -60,6 +60,9 @@ export const api = {
   // Standings
   getStandings: (filter) => request('GET', '/api/standings' + qs(filter)),
 
+  // Off-season
+  getOffSeasonReport: (filter) => request('GET', '/api/off-season/report' + qs(filter)),
+
   // Resources
   listRaces: (filter) => request('GET', '/api/races' + qs(filter)),
   listRaceResults: (filter) => request('GET', '/api/race-results' + qs(filter)),

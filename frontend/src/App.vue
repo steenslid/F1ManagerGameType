@@ -8,6 +8,7 @@ import DriversPanel from './panels/DriversPanel.vue'
 import PracticePanel from './panels/PracticePanel.vue'
 import StrategyPanel from './panels/StrategyPanel.vue'
 import ResultsPanel from './panels/ResultsPanel.vue'
+import OffSeasonPanel from './panels/OffSeasonPanel.vue'
 import ReferencePanel from './panels/ReferencePanel.vue'
 
 const tabs = [
@@ -19,6 +20,7 @@ const tabs = [
   { id: 'practice', label: 'Practice', component: PracticePanel },
   { id: 'strategy', label: 'Strategy', component: StrategyPanel },
   { id: 'results', label: 'Results', component: ResultsPanel },
+  { id: 'offseason', label: 'Off-Season', component: OffSeasonPanel },
   { id: 'reference', label: 'Reference', component: ReferencePanel },
 ]
 

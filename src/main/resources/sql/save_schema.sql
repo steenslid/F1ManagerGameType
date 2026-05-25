@@ -1,19 +1,5 @@
 -- Per-save schema. Run against a freshly-created `save_xxx` schema with
 -- `search_path TO save_xxx, public` set.
---
--- Conventions:
---   * TEXT primary keys for stable reference data seeded from JSON
---     (eras, tracks, compounds, teams, engine_suppliers, sponsors).
---   * UUID primary keys for runtime-generated entities
---     (drivers, personnel, pu_versions, races).
---   * Per-save uniqueness is implicit: this entire file runs inside ONE save schema.
---
--- Note: Postgres reserves CURRENT_ROLE as a built-in function, so the
--- personnel role column is named `role`, not `current_role`.
-
--- ============================================================================
--- The save's identity row
--- ============================================================================
 
 CREATE TABLE game (
     save_id                UUID         PRIMARY KEY,
@@ -41,10 +27,6 @@ CREATE TABLE game (
 
 CREATE UNIQUE INDEX game_singleton ON game ((true));
 
--- ============================================================================
--- Reference: regulation eras
--- ============================================================================
-
 CREATE TABLE regulation_eras (
     id                              TEXT         PRIMARY KEY,
     name                            TEXT         NOT NULL,
@@ -58,10 +40,6 @@ CREATE TABLE regulation_eras (
     CONSTRAINT reg_eras_ers_range CHECK (ers_share BETWEEN 0 AND 1),
     CONSTRAINT reg_eras_years_valid CHECK (end_year IS NULL OR end_year >= start_year)
 );
-
--- ============================================================================
--- Reference: tracks
--- ============================================================================
 
 CREATE TABLE tracks (
     id                              TEXT         PRIMARY KEY,
@@ -94,10 +72,6 @@ CREATE TABLE tracks (
     CONSTRAINT tracks_temp_range CHECK (temperature_max_c >= temperature_min_c)
 );
 
--- ============================================================================
--- Races (the calendar)
--- ============================================================================
-
 CREATE TABLE races (
     id              UUID         PRIMARY KEY,
     season_year     INT          NOT NULL,
@@ -113,10 +87,6 @@ CREATE TABLE races (
 CREATE INDEX races_season_idx ON races (season_year);
 CREATE INDEX races_track_idx ON races (track_id);
 
--- ============================================================================
--- Reference: tyre compounds
--- ============================================================================
-
 CREATE TABLE tyre_compounds (
     id                              TEXT         PRIMARY KEY,
     name                            TEXT         NOT NULL,
@@ -128,10 +98,6 @@ CREATE TABLE tyre_compounds (
 
     CONSTRAINT tyre_temp_range CHECK (optimal_temp_max_c >= optimal_temp_min_c)
 );
-
--- ============================================================================
--- Reference: sponsors
--- ============================================================================
 
 CREATE TABLE sponsors (
     id                              TEXT         PRIMARY KEY,
@@ -152,10 +118,6 @@ CREATE TABLE sponsors (
     CONSTRAINT sponsors_budget_valid CHECK (budget_max >= budget_min)
 );
 
--- ============================================================================
--- Engine suppliers
--- ============================================================================
-
 CREATE TABLE engine_suppliers (
     id                              TEXT         PRIMARY KEY,
     name                            TEXT         NOT NULL,
@@ -167,10 +129,6 @@ CREATE TABLE engine_suppliers (
 
     CONSTRAINT suppliers_years_valid CHECK (exited_year IS NULL OR exited_year >= entered_year)
 );
-
--- ============================================================================
--- Teams
--- ============================================================================
 
 CREATE TABLE teams (
     id                              TEXT         PRIMARY KEY,
@@ -218,10 +176,6 @@ ALTER TABLE game
     FOREIGN KEY (player_team_id) REFERENCES teams(id) ON DELETE SET NULL;
 
 CREATE INDEX teams_series_idx ON teams (series);
-
--- ============================================================================
--- Drivers
--- ============================================================================
 
 CREATE TABLE drivers (
     id                              UUID         PRIMARY KEY,
@@ -275,10 +229,6 @@ CREATE INDEX drivers_racing_team_idx ON drivers (current_racing_team_id);
 CREATE INDEX drivers_reserve_team_idx ON drivers (reserve_for_team_id);
 CREATE INDEX drivers_academy_team_idx ON drivers (academy_team_id);
 
--- ============================================================================
--- Personnel
--- ============================================================================
-
 CREATE TABLE personnel (
     id                              UUID         PRIMARY KEY,
     name                            TEXT         NOT NULL,
@@ -317,10 +267,6 @@ CREATE TABLE personnel (
 
 CREATE INDEX personnel_team_idx ON personnel (current_team_id);
 
--- ============================================================================
--- Power-unit versions
--- ============================================================================
-
 CREATE TABLE pu_versions (
     id                              UUID         PRIMARY KEY,
     supplier_id                     TEXT         NOT NULL REFERENCES engine_suppliers(id) ON DELETE CASCADE,
@@ -344,10 +290,6 @@ CREATE TABLE pu_versions (
 );
 
 CREATE INDEX pu_versions_supplier_idx ON pu_versions (supplier_id);
-
--- ============================================================================
--- Race results
--- ============================================================================
 
 CREATE TABLE race_results (
     race_id             UUID         NOT NULL REFERENCES races(id) ON DELETE CASCADE,
@@ -377,10 +319,6 @@ CREATE TABLE race_results (
 CREATE INDEX race_results_driver_idx ON race_results (driver_id);
 CREATE INDEX race_results_team_idx ON race_results (team_id);
 
--- ============================================================================
--- Practice focus
--- ============================================================================
-
 CREATE TABLE practice_focus (
     race_id     UUID         NOT NULL REFERENCES races(id) ON DELETE CASCADE,
     driver_id   UUID         NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
@@ -395,13 +333,6 @@ CREATE TABLE practice_focus (
 
 CREATE INDEX practice_focus_driver_idx ON practice_focus (driver_id);
 
--- ============================================================================
--- Race strategy
--- Per (race, driver). Editable during QUALIFYING; consumed by race sim.
--- v1 stores the archetype only. When a proper tyre system arrives, per-stint
--- compound and lap-range rows can be derived from this.
--- ============================================================================
-
 CREATE TABLE race_strategy (
     race_id     UUID         NOT NULL REFERENCES races(id) ON DELETE CASCADE,
     driver_id   UUID         NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
@@ -415,3 +346,32 @@ CREATE TABLE race_strategy (
 );
 
 CREATE INDEX race_strategy_driver_idx ON race_strategy (driver_id);
+
+-- ============================================================================
+-- Off-season events
+-- One row per thing-that-happened during off-season processing.
+-- event_type values: FINANCE_SETTLED, AGE_TICK, STAT_DRIFT, RETIREMENT
+-- subject_kind: DRIVER, PERSONNEL, TEAM
+-- subject_id: UUID or TEXT depending on kind (stored as TEXT for simplicity)
+-- ============================================================================
+
+CREATE TABLE off_season_events (
+    id              BIGSERIAL    PRIMARY KEY,
+    season_year     INT          NOT NULL,
+    event_type      TEXT         NOT NULL,
+    subject_kind    TEXT         NOT NULL,
+    subject_id      TEXT         NOT NULL,
+    subject_name    TEXT         NOT NULL,
+    message         TEXT         NOT NULL,
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+
+    CONSTRAINT off_season_event_type_valid CHECK (event_type IN (
+        'FINANCE_SETTLED','AGE_TICK','STAT_DRIFT','RETIREMENT'
+    )),
+    CONSTRAINT off_season_subject_kind_valid CHECK (subject_kind IN (
+        'DRIVER','PERSONNEL','TEAM'
+    ))
+);
+
+CREATE INDEX off_season_events_season_idx ON off_season_events (season_year);
+CREATE INDEX off_season_events_subject_idx ON off_season_events (subject_kind, subject_id);

@@ -13,21 +13,18 @@ import kotlin.random.Random
 /**
  * Game-state orchestration.
  *
- * Practice focus (set via [RaceWeekendService]) is consumed in the qualifying
- * and race hooks: drivers with focus = 'SETUP' get a small multiplier on
- * stat_qualifying / stat_pace. Strategy archetype (also via RaceWeekendService)
- * is read in the race hook and passed as a sim input.
- *
- * Stat math in the sim path is in Double — DB stays Int, the cast happens
- * when building entrants. This fixes the v1 SETUP truncation bug.
+ * Practice focus / strategy: consumed by qualifying / race hooks.
+ * Off-season pipeline: delegated to [OffSeasonService].
  */
-class GameService(private val db: Database) {
+class GameService(
+    private val db: Database,
+    private val offSeasonService: OffSeasonService,
+) {
 
     private val log = LoggerFactory.getLogger(GameService::class.java)
 
     private val fallbackRoundsPerSeason = 24
 
-    /** SETUP focus → 1% multiplier on stat_qualifying / stat_pace this weekend. */
     private val setupBonusMultiplier = 1.01
 
     // ------------------------------------------------------------------
@@ -334,6 +331,15 @@ class GameService(private val db: Database) {
         }
     }
 
+    private fun readMasterSeed(conn: Connection): Long {
+        conn.prepareStatement("SELECT master_rng_seed FROM game").use { stmt ->
+            stmt.executeQuery().use { rs ->
+                check(rs.next()) { "No game row" }
+                return rs.getLong("master_rng_seed")
+            }
+        }
+    }
+
     private fun fastestLapPointEnabled(conn: Connection, year: Int): Boolean {
         conn.prepareStatement(
             """
@@ -362,7 +368,6 @@ class GameService(private val db: Database) {
         from: GameState,
         to: GameState,
     ): List<TransitionEventDto> {
-        @Suppress("UNUSED_PARAMETER")
         return when (to.phase) {
             Phase.PRE_SEASON -> emptyList()
             Phase.PRACTICE -> emptyList()
@@ -372,8 +377,10 @@ class GameService(private val db: Database) {
             Phase.RACE -> runRaceHook(conn, to)
             Phase.POST_RACE -> runPostRaceHook(conn, to)
             Phase.BETWEEN_ROUNDS -> emptyList()
-            Phase.END_OF_SEASON -> emptyList()
-            Phase.OFF_SEASON -> emptyList()
+            Phase.END_OF_SEASON -> runEndOfSeasonHook(conn, from)
+            // PhaseMachine increments the year in this transition; the ending
+            // season is `from.year`, not `to.year`. Read both for clarity.
+            Phase.OFF_SEASON -> runOffSeasonHook(conn, from)
         }
     }
 
@@ -467,8 +474,6 @@ class GameService(private val db: Database) {
                 return emptyList()
             }
 
-        // Pull grid + practice focus + chosen strategy. All LEFT JOIN — drivers
-        // without selections still race with default behaviour.
         val entrants = conn.prepareStatement(
             """
             SELECT rr.driver_id, rr.team_id, rr.grid_position,
@@ -595,6 +600,34 @@ class GameService(private val db: Database) {
                 "Team standings updated for season ${state.year}",
             ),
         )
+    }
+
+    private fun runEndOfSeasonHook(conn: Connection, from: GameState): List<TransitionEventDto> {
+        val count = offSeasonService.runEndOfSeasonHooks(conn, from.year)
+        return if (count > 0) {
+            listOf(
+                TransitionEventDto(
+                    "FINANCE_SETTLED",
+                    "End-of-season finances settled for $count teams",
+                ),
+            )
+        } else emptyList()
+    }
+
+    private fun runOffSeasonHook(conn: Connection, from: GameState): List<TransitionEventDto> {
+        val masterSeed = readMasterSeed(conn)
+        // from.year is the year that just ended (END_OF_SEASON year).
+        // PhaseMachine bumps year on this transition, so `to.year = from.year + 1`,
+        // but the season we're processing is `from.year`.
+        val count = offSeasonService.runOffSeasonHooks(conn, from.year, masterSeed)
+        return if (count > 0) {
+            listOf(
+                TransitionEventDto(
+                    "OFF_SEASON_PROCESSED",
+                    "$count off-season events (aging, retirements)",
+                ),
+            )
+        } else emptyList()
     }
 
     // ------------------------------------------------------------------

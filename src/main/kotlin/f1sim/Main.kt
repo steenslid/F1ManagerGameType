@@ -4,6 +4,7 @@ import f1sim.config.AppConfig
 import f1sim.db.Database
 import f1sim.db.Migrations
 import f1sim.game.GameService
+import f1sim.game.OffSeasonService
 import f1sim.game.RaceWeekendService
 import f1sim.game.StandingsService
 import f1sim.http.Server
@@ -27,7 +28,8 @@ fun main() {
 
     val seedLoader = SeedLoader()
     val saveService = SaveService(db, config, seedLoader)
-    val gameService = GameService(db)
+    val offSeasonService = OffSeasonService(db)
+    val gameService = GameService(db, offSeasonService)
     val raceWeekendService = RaceWeekendService(db)
     val standingsService = StandingsService(db)
     val server = Server(

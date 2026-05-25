@@ -7,6 +7,7 @@ import f1sim.game.RaceWeekendService
 import f1sim.game.StandingsService
 import f1sim.http.routes.DriverRoutes
 import f1sim.http.routes.GameRoutes
+import f1sim.http.routes.OffSeasonRoutes
 import f1sim.http.routes.PersonnelRoutes
 import f1sim.http.routes.PowerUnitRoutes
 import f1sim.http.routes.RaceResultsRoutes
@@ -52,6 +53,7 @@ class Server(
         RaceResultsRoutes(db).register(app)
         RaceWeekendRoutes(raceWeekendService).register(app)
         StandingsRoutes(standingsService).register(app)
+        OffSeasonRoutes(db).register(app)
         PowerUnitRoutes(db).register(app)
         SponsorRoutes(db).register(app)
         ReferenceRoutes(db).register(app)
