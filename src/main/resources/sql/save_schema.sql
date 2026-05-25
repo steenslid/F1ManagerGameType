@@ -358,7 +358,7 @@ CREATE TABLE off_season_events (
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
 
     CONSTRAINT off_season_event_type_valid CHECK (event_type IN (
-        'FINANCE_SETTLED','AGE_TICK','STAT_DRIFT','RETIREMENT','SPONSOR_REVENUE'
+        'FINANCE_SETTLED','AGE_TICK','STAT_DRIFT','RETIREMENT','SPONSOR_REVENUE','OPERATING_COST'
     )),
     CONSTRAINT off_season_subject_kind_valid CHECK (subject_kind IN (
         'DRIVER','PERSONNEL','TEAM'
@@ -367,15 +367,6 @@ CREATE TABLE off_season_events (
 
 CREATE INDEX off_season_events_season_idx ON off_season_events (season_year);
 CREATE INDEX off_season_events_subject_idx ON off_season_events (subject_kind, subject_id);
-
--- ============================================================================
--- Team sponsorships
--- Many-to-many between teams and sponsors with an active year window.
--- A sponsorship is active if start_year <= year <= end_year (inclusive).
--- annual_value is what the sponsor pays the team each year of the contract.
--- is_title flags the team's title sponsor (at most one expected per team
--- per year; not enforced at DB level in v1).
--- ============================================================================
 
 CREATE TABLE team_sponsorships (
     id              BIGSERIAL    PRIMARY KEY,

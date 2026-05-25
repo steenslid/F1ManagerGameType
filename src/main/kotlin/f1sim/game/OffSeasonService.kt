@@ -11,8 +11,8 @@ import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /**
- * Off-season pipeline. Per the design doc this has 11 ordered steps; v1
- * implements:
+ * Off-season / year-flip pipeline. Per the design doc this has 11 ordered
+ * steps; v1 implements:
  *
  *   END_OF_SEASON hooks:
  *     1. Finance settle — apply year's income/expenses to cash_reserves,
@@ -23,8 +23,9 @@ import kotlin.random.Random
  *     3. Retirement rolls.
  *
  *   PRE_SEASON hooks (the new year about to start):
- *     4. Sponsor revenue tick — sum active sponsorships per team, add to
- *        current_year_income.
+ *     4. Sponsor revenue tick — sum active sponsorships, set current_year_income.
+ *     5. Operating cost tick — base_operating_cost + driver salaries +
+ *        personnel salaries, set current_year_expenses.
  *
  * Remaining steps stubbed: contract expirations, markets (driver/personnel/
  * sponsor), junior promotions, regulation reset, board review, calendar
@@ -66,12 +67,17 @@ class OffSeasonService(private val db: Database) {
 
     /**
      * Called when transitioning INTO PRE_SEASON. The new year is starting;
-     * sum each team's active sponsorships and apply to current_year_income.
+     * fill in income (sponsor revenue) and expenses (base + salaries).
      */
     fun runPreSeasonHooks(conn: Connection, newSeasonYear: Int): Int {
         val revenueEvents = applySponsorRevenueTick(conn, newSeasonYear)
-        log.info("PRE_SEASON {}: {} sponsor revenue events", newSeasonYear, revenueEvents)
-        return revenueEvents
+        val costEvents = applyOperatingCostsTick(conn, newSeasonYear)
+        val total = revenueEvents + costEvents
+        log.info(
+            "PRE_SEASON {}: {} sponsor revenue events, {} operating cost events",
+            newSeasonYear, revenueEvents, costEvents,
+        )
+        return total
     }
 
     // ------------------------------------------------------------------
@@ -507,7 +513,6 @@ class OffSeasonService(private val db: Database) {
             }
         }
 
-        // Only update teams that actually have revenue this year.
         val updates = rows.filter { it.totalRevenue > 0 }
         if (updates.isEmpty()) return 0
 
@@ -529,6 +534,106 @@ class OffSeasonService(private val db: Database) {
                     "SPONSOR_REVENUE", "TEAM", u.teamId, u.teamName,
                     "${u.teamName}: ${u.dealCount} active deals worth $${u.totalRevenue} " +
                         "→ current_year_income $${u.newIncome}",
+                )
+            },
+        )
+
+        return updates.size
+    }
+
+    // ------------------------------------------------------------------
+    // Step 5: Operating cost tick (PRE_SEASON)
+    // ------------------------------------------------------------------
+
+    /**
+     * For each F1 team: cost = base_operating_cost + sum(driver salaries) +
+     * sum(personnel salaries), where only non-retired entities currently
+     * attached to the team count. Applied to current_year_expenses.
+     */
+    private fun applyOperatingCostsTick(conn: Connection, seasonYear: Int): Int {
+        data class TeamCost(
+            val teamId: String,
+            val teamName: String,
+            val base: Long,
+            val driverSalaries: Long,
+            val personnelSalaries: Long,
+            val total: Long,
+            val oldExpenses: Long,
+            val newExpenses: Long,
+        )
+
+        val rows = conn.prepareStatement(
+            """
+            SELECT t.id AS team_id, t.name AS team_name,
+                   t.current_year_expenses AS old_expenses,
+                   t.base_operating_cost AS base_cost,
+                   COALESCE(driver_sum.salaries, 0) AS driver_salaries,
+                   COALESCE(personnel_sum.salaries, 0) AS personnel_salaries
+              FROM teams t
+              LEFT JOIN (
+                  SELECT current_racing_team_id AS team_id, SUM(current_salary) AS salaries
+                    FROM drivers
+                   WHERE NOT retired
+                     AND current_racing_team_id IS NOT NULL
+                   GROUP BY current_racing_team_id
+              ) driver_sum ON driver_sum.team_id = t.id
+              LEFT JOIN (
+                  SELECT current_team_id AS team_id, SUM(current_salary) AS salaries
+                    FROM personnel
+                   WHERE NOT retired
+                     AND current_team_id IS NOT NULL
+                   GROUP BY current_team_id
+              ) personnel_sum ON personnel_sum.team_id = t.id
+             WHERE t.series = 'F1'
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        val oldExpenses = rs.getLong("old_expenses")
+                        val base = rs.getLong("base_cost")
+                        val driverSalaries = rs.getLong("driver_salaries")
+                        val personnelSalaries = rs.getLong("personnel_salaries")
+                        val total = base + driverSalaries + personnelSalaries
+                        add(
+                            TeamCost(
+                                teamId = rs.getString("team_id"),
+                                teamName = rs.getString("team_name"),
+                                base = base,
+                                driverSalaries = driverSalaries,
+                                personnelSalaries = personnelSalaries,
+                                total = total,
+                                oldExpenses = oldExpenses,
+                                newExpenses = oldExpenses + total,
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        val updates = rows.filter { it.total > 0 }
+        if (updates.isEmpty()) return 0
+
+        conn.prepareStatement(
+            "UPDATE teams SET current_year_expenses = ? WHERE id = ?"
+        ).use { stmt ->
+            updates.forEach { u ->
+                stmt.setLong(1, u.newExpenses)
+                stmt.setString(2, u.teamId)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        }
+
+        logEvents(
+            conn, seasonYear,
+            updates.map { u ->
+                EventToLog(
+                    "OPERATING_COST", "TEAM", u.teamId, u.teamName,
+                    "${u.teamName}: base $${u.base} + drivers $${u.driverSalaries} + " +
+                        "personnel $${u.personnelSalaries} = $${u.total} " +
+                        "→ current_year_expenses $${u.newExpenses}",
                 )
             },
         )

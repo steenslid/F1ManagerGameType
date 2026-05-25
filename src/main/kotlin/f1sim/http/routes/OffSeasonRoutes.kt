@@ -11,13 +11,8 @@ import kotlinx.serialization.builtins.ListSerializer
 import java.sql.ResultSet
 
 /**
- * /api/off-season/report — what happened during a season's off-season
- * processing.
- *
- * Query params:
- *   ?season={year}  — default: latest season that has events
- *
- * Returns the raw event log, plus aggregate counts for quick scanning.
+ * /api/off-season/report — what happened during a season's off-season /
+ * pre-season processing.
  */
 class OffSeasonRoutes(private val db: Database) {
 
@@ -35,6 +30,7 @@ class OffSeasonRoutes(private val db: Database) {
         val statDrifts: Int,
         val retirements: Int,
         val sponsorRevenue: Int,
+        val operatingCosts: Int,
     )
 
     @Serializable
@@ -60,7 +56,7 @@ class OffSeasonRoutes(private val db: Database) {
             if (targetSeason == null) {
                 ReportDto(
                     seasonYear = null,
-                    counts = CountsDto(0, 0, 0, 0, 0),
+                    counts = CountsDto(0, 0, 0, 0, 0, 0),
                     events = emptyList(),
                 )
             } else {
@@ -71,6 +67,7 @@ class OffSeasonRoutes(private val db: Database) {
                     statDrifts = events.count { it.eventType == "STAT_DRIFT" },
                     retirements = events.count { it.eventType == "RETIREMENT" },
                     sponsorRevenue = events.count { it.eventType == "SPONSOR_REVENUE" },
+                    operatingCosts = events.count { it.eventType == "OPERATING_COST" },
                 )
                 ReportDto(
                     seasonYear = targetSeason,

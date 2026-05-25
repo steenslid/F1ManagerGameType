@@ -29,6 +29,8 @@ const groupedEvents = computed(() => {
     AGE_TICK: [],
     STAT_DRIFT: [],
     RETIREMENT: [],
+    SPONSOR_REVENUE: [],
+    OPERATING_COST: [],
   }
   for (const e of report.value.events) {
     if (groups[e.eventType]) groups[e.eventType].push(e)
@@ -72,6 +74,8 @@ onMounted(refresh)
           <span class="pill">{{ report.counts.ageTicks }} aging</span>
           <span class="pill">{{ report.counts.statDrifts }} stat drift</span>
           <span class="pill">{{ report.counts.retirements }} retired</span>
+          <span class="pill">{{ report.counts.sponsorRevenue }} sponsor</span>
+          <span class="pill">{{ report.counts.operatingCosts }} ops cost</span>
         </p>
 
         <h3 v-if="groupedEvents.RETIREMENT.length">Retirements</h3>
@@ -102,7 +106,33 @@ onMounted(refresh)
           </tbody>
         </table>
 
-        <h3 v-if="groupedEvents.FINANCE_SETTLED.length">Finance</h3>
+        <h3 v-if="groupedEvents.SPONSOR_REVENUE.length">Sponsor revenue (income)</h3>
+        <table v-if="groupedEvents.SPONSOR_REVENUE.length">
+          <thead>
+            <tr><th>Team</th><th>Detail</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="e in groupedEvents.SPONSOR_REVENUE" :key="e.id">
+              <td>{{ e.subjectName }}</td>
+              <td>{{ e.message }}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 v-if="groupedEvents.OPERATING_COST.length">Operating costs (expenses)</h3>
+        <table v-if="groupedEvents.OPERATING_COST.length">
+          <thead>
+            <tr><th>Team</th><th>Detail</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="e in groupedEvents.OPERATING_COST" :key="e.id">
+              <td>{{ e.subjectName }}</td>
+              <td>{{ e.message }}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 v-if="groupedEvents.FINANCE_SETTLED.length">Finance settlement</h3>
         <table v-if="groupedEvents.FINANCE_SETTLED.length">
           <thead>
             <tr><th>Team</th><th>Detail</th></tr>

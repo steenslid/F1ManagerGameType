@@ -22,6 +22,10 @@ import java.util.UUID
  *   drivers (FKs to teams)
  *   personnel (FK to teams)
  *   team_sponsorships (FKs to teams + sponsors)
+ *
+ * After all base data is in, [computeDerivedSeedValues] fills in fields that
+ * depend on other rows (driver salaries scaled by stat_pace, team
+ * base_operating_cost scaled by prestige).
  */
 class SeedLoader {
 
@@ -45,6 +49,7 @@ class SeedLoader {
         loadDrivers(conn)
         loadPersonnel(conn)
         loadTeamSponsorships(conn)
+        computeDerivedSeedValues(conn)
         log.info("Seeding complete")
     }
 
@@ -374,19 +379,7 @@ class SeedLoader {
         log.info("  personnel: {} rows", items.size)
     }
 
-    /**
-     * Initial sponsorship grid for the 2026 starting state. Hardcoded rather
-     * than JSON-driven because values are tuned per (team, sponsor) and grow
-     * with the team roster. When the sponsor market lands, this is the
-     * starting state it inherits.
-     *
-     * Convention: each F1 team has 1 title deal + 2-3 lower-tier deals.
-     * All deals run 2026-2027 (two-year contracts) so the first END_OF_SEASON
-     * doesn't expire everything.
-     */
     private fun loadTeamSponsorships(conn: Connection) {
-        // (team_id, sponsor_id, annual_value, is_title) — start/end years
-        // are 2026-2027 for the whole seed.
         val deals = listOf(
             // Scuderia Rossa — top-prestige Italian team
             Triple("scuderia-rossa", "atlas-fintech", 90_000_000L) to true,
@@ -398,7 +391,7 @@ class SeedLoader {
             Triple("silberpfeile", "polaris-cloud", 40_000_000L) to false,
             Triple("silberpfeile", "meridian-oils", 15_000_000L) to false,
 
-            // Energy Racing — Austrian, has its own beverage tie-in IRL
+            // Energy Racing — Austrian
             Triple("energy-racing", "kairos-air", 85_000_000L) to true,
             Triple("energy-racing", "polaris-cloud", 32_000_000L) to false,
             Triple("energy-racing", "axiom-tools", 12_000_000L) to false,
@@ -433,6 +426,48 @@ class SeedLoader {
             stmt.executeBatch()
         }
         log.info("  team_sponsorships: {} rows", deals.size)
+    }
+
+    /**
+     * Fills derived fields that depend on multiple seed rows:
+     *
+     *   - teams.base_operating_cost = 30M + (prestige * 1M).
+     *     Top teams (~95 prestige) → $125M base. Bottom teams (~40) → $70M.
+     *   - drivers.current_salary scaled by stat_pace.
+     *     >= 90: $20M. 80-89: $8M. 70-79: $2M. <70: $500k.
+     *
+     * Personnel salaries are already set in personnel.json — left alone.
+     *
+     * Runs after all base seeds so it can read prestige / stat_pace from the
+     * inserted rows. Single UPDATE per table.
+     */
+    private fun computeDerivedSeedValues(conn: Connection) {
+        // teams.base_operating_cost
+        val teamUpdates = conn.prepareStatement(
+            """
+            UPDATE teams
+               SET base_operating_cost = 30000000 + (prestige * 1000000)::BIGINT
+             WHERE series = 'F1'
+               AND base_operating_cost = 0
+            """.trimIndent()
+        ).use { stmt -> stmt.executeUpdate() }
+        log.info("  derived: base_operating_cost for {} teams", teamUpdates)
+
+        // drivers.current_salary — only fill where zero (don't clobber seeded values)
+        val driverUpdates = conn.prepareStatement(
+            """
+            UPDATE drivers
+               SET current_salary = CASE
+                   WHEN stat_pace >= 90 THEN 20000000
+                   WHEN stat_pace >= 80 THEN 8000000
+                   WHEN stat_pace >= 70 THEN 2000000
+                   ELSE 500000
+               END
+             WHERE current_salary = 0
+               AND current_racing_team_id IS NOT NULL
+            """.trimIndent()
+        ).use { stmt -> stmt.executeUpdate() }
+        log.info("  derived: current_salary for {} drivers", driverUpdates)
     }
 
     private fun <T> readSeed(fileName: String, elementSerializer: KSerializer<T>): List<T> {
