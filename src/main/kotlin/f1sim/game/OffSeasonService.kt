@@ -21,15 +21,17 @@ import kotlin.random.Random
  *   OFF_SEASON hooks (the year just ended):
  *     2. Aging tick — drivers and personnel +1 year, pace drift past peak.
  *     3. Retirement rolls.
+ *     4. Contract expirations — non-retired drivers/personnel whose
+ *        contract_expires_year <= ending year are released to free-agent
+ *        state (team affiliations nulled, contract dates kept as history).
  *
  *   PRE_SEASON hooks (the new year about to start):
- *     4. Sponsor revenue tick — sum active sponsorships, set current_year_income.
- *     5. Operating cost tick — base_operating_cost + driver salaries +
+ *     5. Sponsor revenue tick — sum active sponsorships, set current_year_income.
+ *     6. Operating cost tick — base_operating_cost + driver salaries +
  *        personnel salaries, set current_year_expenses.
  *
- * Remaining steps stubbed: contract expirations, markets (driver/personnel/
- * sponsor), junior promotions, regulation reset, board review, calendar
- * generation.
+ * Remaining steps stubbed: driver / personnel / sponsor markets, junior
+ * promotions, regulation reset, board review, calendar generation.
  *
  * All hooks write to `off_season_events` for the report. The whole pipeline
  * runs inside the GameService advance transaction.
@@ -57,10 +59,14 @@ class OffSeasonService(private val db: Database) {
 
         val ageEvents = applyAgingTick(conn, endingSeasonYear)
         val retirementEvents = rollRetirements(conn, endingSeasonYear, masterSeed)
-        val total = ageEvents + retirementEvents
+        // Contract expirations run after retirements so retirees aren't listed twice.
+        // Retirement nulls team affiliations, so an expired-contract retiree fails
+        // the "has a team" predicate below and is skipped naturally.
+        val expirationEvents = rollContractExpirations(conn, endingSeasonYear)
+        val total = ageEvents + retirementEvents + expirationEvents
         log.info(
-            "OFF_SEASON for ending year {}: {} aging events, {} retirements",
-            endingSeasonYear, ageEvents, retirementEvents,
+            "OFF_SEASON for ending year {}: {} aging events, {} retirements, {} contract expirations",
+            endingSeasonYear, ageEvents, retirementEvents, expirationEvents,
         )
         return total
     }
@@ -463,7 +469,170 @@ class OffSeasonService(private val db: Database) {
     }
 
     // ------------------------------------------------------------------
-    // Step 4: Sponsor revenue tick (PRE_SEASON)
+    // Step 4: Contract expirations
+    // ------------------------------------------------------------------
+
+    /**
+     * Contracts whose `contract_expires_year` is <= the ending season year
+     * have lapsed. Affected drivers / personnel are released to free-agent
+     * state by nulling their team affiliations. They aren't retired —
+     * retirement runs first and would null both `retired` and the
+     * affiliations; survivors of that filter are what we process here.
+     *
+     * `contract_expires_year` / `contract_expires_round` are deliberately
+     * left in place. They serve as a record of when the contract ended.
+     * The driver/personnel market (next chunk) will overwrite them on a
+     * new signing.
+     *
+     * No RNG — fully deterministic from the contract year.
+     */
+    private fun rollContractExpirations(conn: Connection, endingSeasonYear: Int): Int {
+        var count = 0
+        count += expireDriverContracts(conn, endingSeasonYear)
+        count += expirePersonnelContracts(conn, endingSeasonYear)
+        return count
+    }
+
+    private fun expireDriverContracts(conn: Connection, endingSeasonYear: Int): Int {
+        data class Expiry(
+            val id: UUID, val name: String,
+            val previousTeamId: String?,
+            val contractYear: Int,
+        )
+
+        // Only drivers with some team affiliation at all — pure free agents
+        // (no racing / reserve / academy team) have nothing to release.
+        val expiries = conn.prepareStatement(
+            """
+            SELECT id, name, current_racing_team_id, contract_expires_year
+              FROM drivers
+             WHERE NOT retired
+               AND contract_expires_year IS NOT NULL
+               AND contract_expires_year <= ?
+               AND (
+                 current_racing_team_id IS NOT NULL
+                 OR reserve_for_team_id IS NOT NULL
+                 OR academy_team_id IS NOT NULL
+               )
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.setInt(1, endingSeasonYear)
+            stmt.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            Expiry(
+                                id = rs.getObject("id", UUID::class.java),
+                                name = rs.getString("name"),
+                                previousTeamId = rs.getString("current_racing_team_id"),
+                                contractYear = rs.getInt("contract_expires_year"),
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        if (expiries.isEmpty()) return 0
+
+        conn.prepareStatement(
+            """
+            UPDATE drivers SET
+              current_racing_team_id = NULL,
+              reserve_for_team_id = NULL,
+              academy_team_id = NULL
+             WHERE id = ?
+            """.trimIndent()
+        ).use { stmt ->
+            expiries.forEach { e ->
+                stmt.setObject(1, e.id)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        }
+
+        logEvents(
+            conn, endingSeasonYear,
+            expiries.map { e ->
+                val from = e.previousTeamId ?: "(no racing team)"
+                EventToLog(
+                    "CONTRACT_EXPIRED", "DRIVER", e.id.toString(), e.name,
+                    "${e.name}: contract expired (${e.contractYear}); released from $from",
+                )
+            },
+        )
+        return expiries.size
+    }
+
+    private fun expirePersonnelContracts(conn: Connection, endingSeasonYear: Int): Int {
+        data class Expiry(
+            val id: UUID, val name: String,
+            val previousTeamId: String?,
+            val previousRole: String?,
+            val contractYear: Int,
+        )
+
+        val expiries = conn.prepareStatement(
+            """
+            SELECT id, name, current_team_id, role, contract_expires_year
+              FROM personnel
+             WHERE NOT retired
+               AND contract_expires_year IS NOT NULL
+               AND contract_expires_year <= ?
+               AND current_team_id IS NOT NULL
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.setInt(1, endingSeasonYear)
+            stmt.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            Expiry(
+                                id = rs.getObject("id", UUID::class.java),
+                                name = rs.getString("name"),
+                                previousTeamId = rs.getString("current_team_id"),
+                                previousRole = rs.getString("role"),
+                                contractYear = rs.getInt("contract_expires_year"),
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        if (expiries.isEmpty()) return 0
+
+        conn.prepareStatement(
+            """
+            UPDATE personnel SET
+              current_team_id = NULL,
+              role = NULL
+             WHERE id = ?
+            """.trimIndent()
+        ).use { stmt ->
+            expiries.forEach { e ->
+                stmt.setObject(1, e.id)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        }
+
+        logEvents(
+            conn, endingSeasonYear,
+            expiries.map { e ->
+                val from = e.previousTeamId ?: "(no team)"
+                val roleNote = if (e.previousRole != null) " as ${e.previousRole}" else ""
+                EventToLog(
+                    "CONTRACT_EXPIRED", "PERSONNEL", e.id.toString(), e.name,
+                    "${e.name}: contract expired (${e.contractYear}); released from $from$roleNote",
+                )
+            },
+        )
+        return expiries.size
+    }
+
+    // ------------------------------------------------------------------
+    // Step 5: Sponsor revenue tick (PRE_SEASON)
     // ------------------------------------------------------------------
 
     private fun applySponsorRevenueTick(conn: Connection, seasonYear: Int): Int {
@@ -542,7 +711,7 @@ class OffSeasonService(private val db: Database) {
     }
 
     // ------------------------------------------------------------------
-    // Step 5: Operating cost tick (PRE_SEASON)
+    // Step 6: Operating cost tick (PRE_SEASON)
     // ------------------------------------------------------------------
 
     /**

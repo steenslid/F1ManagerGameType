@@ -88,7 +88,7 @@ per-team. Wins / podiums / poles remain race-only per design doc
 stats"). `GET /api/standings?type=driver|team|both&season=` returns the
 leaderboard.
 
-**Off-season / year-flip pipeline (5 of 11 steps).** `OffSeasonService`
+**Off-season / year-flip pipeline (6 of 11 steps).** `OffSeasonService`
 owns all year-level hooks. Per-save deterministic via master seed + per-step
 salt constants. Skips END_OF_SEASON / OFF_SEASON hooks if no races were
 simulated (prevents first-advance aging on fresh saves).
@@ -100,7 +100,7 @@ simulated (prevents first-advance aging on fresh saves).
     `current_year_income` so it flows through finance settle.
   - **Finance settle.** `cash_reserves += (income - expenses)`, then
     `income = 0, expenses = 0`. One event per F1 team.
-- **OFF_SEASON hook:**
+- **OFF_SEASON hook (ordered):**
   - **Aging tick.** Drivers `current_age += 1`, personnel `age += 1`. For
     those past `trait_peak_age`, drop `stat_pace` (drivers) /
     `skill_design` (personnel) by `(age - peak_age) * decline_rate`,
@@ -110,6 +110,12 @@ simulated (prevents first-advance aging on fresh saves).
     retirement_threshold`. Personnel > 55: linear curve 5% at 60 → 100%
     at 75 (`personnelRetirementThresholdAt`). Retirees get
     `retired = true`, all team affiliations nulled.
+  - **Contract expirations.** Drivers / personnel where
+    `contract_expires_year <= endingSeasonYear` and not already retired
+    have their team affiliations nulled (drivers: racing / reserve /
+    academy; personnel: team + role). `contract_expires_year/round` are
+    kept as a historical record. Purely date-driven — no RNG. Runs
+    after retirements so retirees don't double-log.
 - **PRE_SEASON hook:**
   - **Sponsor revenue tick.** Sum each team's active sponsorships
     (`start_year <= year <= end_year`), set `current_year_income`. One
@@ -119,8 +125,8 @@ simulated (prevents first-advance aging on fresh saves).
     `current_year_expenses`. One event per team.
 
 All hooks log to `off_season_events` (event_type CHECK includes:
-FINANCE_SETTLED, AGE_TICK, STAT_DRIFT, RETIREMENT, SPONSOR_REVENUE,
-OPERATING_COST, FOM_PRIZE). Inside the same transaction as the state
+FINANCE_SETTLED, AGE_TICK, STAT_DRIFT, RETIREMENT, CONTRACT_EXPIRED,
+SPONSOR_REVENUE, OPERATING_COST). Inside the same transaction as the state
 changes — atomic per advance.
 
 **Economy (v1 balanced).** Top teams clear ~$145M/year surplus; back-of-grid
@@ -148,12 +154,12 @@ table on sprint weekends.
 
 ### Big systems — multiple rounds each
 
-- **Contract expirations + driver/personnel markets.** Mark contracts
-  expired at end of contract year, transition to free agents, multi-round
-  off-season market resolution with AI bidding. Biggest single gameplay
-  unlock — transforms off-season from "advance and watch numbers" into
-  actual decisions. Sequence: contract-expiration (small) → free-agent
-  state → driver market (large) → personnel market (medium).
+- **Driver / personnel markets.** Multi-round off-season market resolution
+  with AI bidding for free agents. Biggest single gameplay unlock —
+  transforms off-season from "advance and watch numbers" into actual
+  decisions. Contract expirations now run (drivers/personnel become free
+  agents at end of contract year); what's missing is the matching
+  process. Sequence: driver market (large) → personnel market (medium).
 - **R&D.** `part_versions`, `team_parts_current` (or just MAX(mk_version)
   per supplier-style), `development_projects`. Player allocates R&D budget
   by part type at season start; tick in `BETWEEN_ROUNDS` hook. Design doc
@@ -247,8 +253,9 @@ filter. Unknown value → empty result, no validation error.
 
 **Schema changes.** Add to `save_schema.sql`. Schema-per-save model means
 no migration framework — users drop test saves and recreate after schema
-edits. Document what triggered the recreate. (Most recent recreate trigger:
-adding `sprint_results` table.)
+edits. Document what triggered the recreate. (Most recent recreate
+triggers: adding `sprint_results` table; adding `CONTRACT_EXPIRED` to
+the `off_season_events.event_type` CHECK.)
 
 **Pipeline hook pattern.** `OffSeasonService.runXxxHooks(conn, year, ...)`
 called from the matching transition branch in
@@ -290,9 +297,12 @@ preservation. No client-side mirror of "loaded save" — query the backend.
 
 ## Known issues / shortcuts
 
-- **No contract expiration system.** `contract_expires_year` is stored
-  but nothing enforces it. Currently every driver/personnel is locked to
-  their team forever. The driver market needs this first.
+- **No driver market yet.** Contract expirations run at end of season;
+  affected drivers/personnel become free agents with team affiliations
+  nulled. There is no market to re-sign them. By the end of the 2027
+  off-season, most of the seeded grid will be free agents and teams
+  will have empty seats. Race sim continues to run on whoever is still
+  on a team's roster. The market chunk is the next planned piece.
 - **All seeded sponsor deals expire 2027.** Without sponsor renewal /
   market, teams will have $0 income in 2028+ until the sponsor market
   lands. Multi-year (3+) playthroughs hit a money cliff.
@@ -452,6 +462,12 @@ frontend/
   revenue sets income = revenue total; operating cost sets expenses =
   cost total. FOM prize at END_OF_SEASON does add (`income += prize`)
   because finance settle hasn't zeroed yet.
+- **OFF_SEASON step order matters.** Aging → retirements → contract
+  expirations. Retirements run before contract expirations so a retiring
+  driver whose contract also expired ends up flagged retired (not
+  released as a free agent). The expiration query requires
+  `NOT retired AND has-a-team`, which the retirement update has already
+  nulled, so the retiree is naturally skipped.
 - **Salt collisions.** All XOR salts must be distinct. Current set:
   `QUALIFYING_SALT`, `RACE_SALT`, `SPRINT_QUALIFYING_SALT`, `SPRINT_SALT`,
   `RETIRE_SALT`. When adding new deterministic RNG contexts (e.g. driver

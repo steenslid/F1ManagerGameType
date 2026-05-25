@@ -29,6 +29,7 @@ class OffSeasonRoutes(private val db: Database) {
         val ageTicks: Int,
         val statDrifts: Int,
         val retirements: Int,
+        val contractExpirations: Int,
         val sponsorRevenue: Int,
         val operatingCosts: Int,
     )
@@ -56,7 +57,7 @@ class OffSeasonRoutes(private val db: Database) {
             if (targetSeason == null) {
                 ReportDto(
                     seasonYear = null,
-                    counts = CountsDto(0, 0, 0, 0, 0, 0),
+                    counts = CountsDto(0, 0, 0, 0, 0, 0, 0),
                     events = emptyList(),
                 )
             } else {
@@ -66,6 +67,7 @@ class OffSeasonRoutes(private val db: Database) {
                     ageTicks = events.count { it.eventType == "AGE_TICK" },
                     statDrifts = events.count { it.eventType == "STAT_DRIFT" },
                     retirements = events.count { it.eventType == "RETIREMENT" },
+                    contractExpirations = events.count { it.eventType == "CONTRACT_EXPIRED" },
                     sponsorRevenue = events.count { it.eventType == "SPONSOR_REVENUE" },
                     operatingCosts = events.count { it.eventType == "OPERATING_COST" },
                 )
