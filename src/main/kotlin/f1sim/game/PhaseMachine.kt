@@ -17,20 +17,33 @@ package f1sim.game
  *
  * Season boundary:
  *   END_OF_SEASON -> OFF_SEASON (year + 1, round = 0)
- *   OFF_SEASON -> PRE_SEASON
+ *   OFF_SEASON    -> DRIVER_MARKET
+ *   DRIVER_MARKET -> DRIVER_MARKET (round runs, market not yet exhausted)
+ *                 -> PRE_SEASON    (all rounds done)
  *
  * `isSprintWeekend` is consulted only at the PRACTICE -> next transition;
- * other phases ignore it. GameService queries the `races` table for the
- * current round's `session_format` and passes the boolean in.
+ * other phases ignore it. `isMarketComplete` is consulted only at the
+ * DRIVER_MARKET -> next transition.
  *
  * Pure: no DB, no logging, no side effects. The caller (GameService) is
- * responsible for supplying both roundsPerSeason and isSprintWeekend.
+ * responsible for supplying all three booleans.
  */
 object PhaseMachine {
 
-    fun next(state: GameState, roundsPerSeason: Int, isSprintWeekend: Boolean): GameState =
+    fun next(
+        state: GameState,
+        roundsPerSeason: Int,
+        isSprintWeekend: Boolean,
+        isMarketComplete: Boolean = false,
+    ): GameState =
         when (state.phase) {
-            Phase.OFF_SEASON -> state.copy(phase = Phase.PRE_SEASON)
+            Phase.OFF_SEASON -> state.copy(phase = Phase.DRIVER_MARKET)
+
+            Phase.DRIVER_MARKET -> if (isMarketComplete) {
+                state.copy(phase = Phase.PRE_SEASON)
+            } else {
+                state  // stay in market; another round runs on the next advance
+            }
 
             Phase.PRE_SEASON -> state.copy(phase = Phase.PRACTICE, round = 1)
 

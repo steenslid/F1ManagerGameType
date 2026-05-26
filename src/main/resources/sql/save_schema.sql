@@ -19,7 +19,7 @@ CREATE TABLE game (
 
     CONSTRAINT game_difficulty_valid CHECK (difficulty IN ('EASY','NORMAL','HARD','BRUTAL')),
     CONSTRAINT game_phase_valid CHECK (current_phase IN (
-        'OFF_SEASON','PRE_SEASON',
+        'OFF_SEASON','DRIVER_MARKET','PRE_SEASON',
         'PRACTICE','QUALIFYING','SPRINT_QUALIFYING','SPRINT','RACE','POST_RACE',
         'BETWEEN_ROUNDS','END_OF_SEASON'
     ))
@@ -418,3 +418,37 @@ CREATE TABLE team_sponsorships (
 CREATE INDEX team_sponsorships_team_idx ON team_sponsorships (team_id);
 CREATE INDEX team_sponsorships_sponsor_idx ON team_sponsorships (sponsor_id);
 CREATE INDEX team_sponsorships_active_idx ON team_sponsorships (start_year, end_year);
+
+-- Driver market state. Singleton — at most one active market per save,
+-- representing the off-season market currently being played. Reset at
+-- the start of each off-season's market phase.
+CREATE TABLE driver_market_state (
+    season_year     INT          NOT NULL,
+    current_round   INT          NOT NULL DEFAULT 0,
+    total_rounds    INT          NOT NULL DEFAULT 3,
+    started_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+
+    CONSTRAINT driver_market_round_range CHECK (
+        current_round BETWEEN 0 AND total_rounds
+    )
+);
+
+CREATE UNIQUE INDEX driver_market_state_singleton ON driver_market_state ((true));
+
+-- Pending player offers in the active driver market. One row per
+-- (driver, team) — a team can only have one pending offer per driver.
+-- Cleared between market rounds; the resolver consumes them.
+CREATE TABLE driver_market_offers (
+    driver_id       UUID         NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+    team_id         TEXT         NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    salary          BIGINT       NOT NULL,
+    contract_years  INT          NOT NULL,
+    submitted_round INT          NOT NULL,
+    submitted_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (driver_id, team_id),
+    CONSTRAINT driver_market_offers_salary_range CHECK (salary BETWEEN 100000 AND 200000000),
+    CONSTRAINT driver_market_offers_years_range CHECK (contract_years BETWEEN 1 AND 5)
+);
+
+CREATE INDEX driver_market_offers_team_idx ON driver_market_offers (team_id);

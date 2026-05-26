@@ -15,12 +15,15 @@ import kotlin.random.Random
  *
  * Race-weekend hooks (qualifying, race, sprint qualifying, sprint, post-race)
  * live here directly. Year-level hooks (END_OF_SEASON finance settle,
- * OFF_SEASON aging/retirement, PRE_SEASON sponsor revenue) are delegated to
- * [OffSeasonService].
+ * OFF_SEASON aging/retirement/expiration, PRE_SEASON sponsor revenue) are
+ * delegated to [OffSeasonService]. Driver market hooks (initialize, run a
+ * round, finalize) delegate to [DriverMarketService] — driver market lives
+ * in its own phase between OFF_SEASON and PRE_SEASON.
  */
 class GameService(
     private val db: Database,
     private val offSeasonService: OffSeasonService,
+    private val driverMarketService: DriverMarketService,
 ) {
 
     private val log = LoggerFactory.getLogger(GameService::class.java)
@@ -116,14 +119,38 @@ class GameService(
                 val before = readPhaseState(conn)
                 val roundsThisSeason = countRoundsInSeason(conn, before.year)
                 val isSprintWeekend = isSprintRound(conn, before.year, before.round)
-                val after = PhaseMachine.next(before, roundsThisSeason, isSprintWeekend)
+
+                // For DRIVER_MARKET -> next decision: run the hook FIRST
+                // (it advances the round counter), then check completion
+                // via DriverMarketService. This is the only phase where a
+                // hook needs to influence the transition itself.
+                val (after, events) = if (before.phase == Phase.DRIVER_MARKET) {
+                    val roundEvents = runDriverMarketHook(conn, before)
+                    val complete = driverMarketService.isMarketComplete(conn)
+                    val next = PhaseMachine.next(
+                        before, roundsThisSeason, isSprintWeekend,
+                        isMarketComplete = complete,
+                    )
+                    val transitionEvents = if (next.phase != Phase.DRIVER_MARKET) {
+                        roundEvents + runTransitionHooks(conn, before, next)
+                    } else {
+                        roundEvents
+                    }
+                    next to transitionEvents
+                } else {
+                    val next = PhaseMachine.next(
+                        before, roundsThisSeason, isSprintWeekend,
+                        isMarketComplete = false,
+                    )
+                    next to runTransitionHooks(conn, before, next)
+                }
+
                 log.info(
                     "Transition: {} y{} r{} -> {} y{} r{} (season has {} rounds; sprint? {})",
                     before.phase, before.year, before.round,
                     after.phase, after.year, after.round,
                     roundsThisSeason, isSprintWeekend,
                 )
-                val events = runTransitionHooks(conn, before, after)
                 writePhaseState(conn, after)
                 touchLastPlayed(conn)
                 conn.commit()
@@ -365,13 +392,18 @@ class GameService(
     // Transition hooks
     // ------------------------------------------------------------------
 
+    /**
+     * Runs on every transition EXCEPT the DRIVER_MARKET self-loop case,
+     * which is handled inline in [advance] (the hook must run before the
+     * machine knows whether to stay in the phase or exit).
+     */
     private fun runTransitionHooks(
         conn: Connection,
         from: GameState,
         to: GameState,
     ): List<TransitionEventDto> {
         return when (to.phase) {
-            Phase.PRE_SEASON -> runPreSeasonHook(conn, to)
+            Phase.PRE_SEASON -> runPreSeasonHook(conn, to, from)
             Phase.PRACTICE -> emptyList()
             Phase.QUALIFYING -> runQualifyingHook(conn, to)
             Phase.SPRINT_QUALIFYING -> runSprintQualifyingHook(conn, to)
@@ -381,6 +413,10 @@ class GameService(
             Phase.BETWEEN_ROUNDS -> emptyList()
             Phase.END_OF_SEASON -> runEndOfSeasonHook(conn, from)
             Phase.OFF_SEASON -> runOffSeasonHook(conn, from)
+            // Entering DRIVER_MARKET from OFF_SEASON: initialize.
+            // (DRIVER_MARKET self-loop is handled in advance(); we won't be
+            // called for that case.)
+            Phase.DRIVER_MARKET -> runEnterDriverMarketHook(conn, from)
         }
     }
 
@@ -544,12 +580,6 @@ class GameService(
 
     // -- Sprint hooks -------------------------------------------------
 
-    /**
-     * Sprint qualifying. Uses the same model as full qualifying (same noise,
-     * same setup focus effect), just a different salt so the resulting grid
-     * is uncorrelated with main qualifying. Writes the sprint grid to
-     * `sprint_results`.
-     */
     private fun runSprintQualifyingHook(conn: Connection, state: GameState): List<TransitionEventDto> {
         val (raceId, masterSeed) = lookupRaceAndSeed(conn, state.year, state.round)
             ?: run {
@@ -600,11 +630,6 @@ class GameService(
         )
     }
 
-    /**
-     * Runs the sprint race. Reads the sprint grid from `sprint_results` (set
-     * by `runSprintQualifyingHook`), simulates, writes finishing positions and
-     * sprint_points back to the same row.
-     */
     private fun runSprintHook(conn: Connection, state: GameState): List<TransitionEventDto> {
         val (raceId, masterSeed) = lookupRaceAndSeed(conn, state.year, state.round)
             ?: run {
@@ -693,13 +718,6 @@ class GameService(
         return events
     }
 
-    /**
-     * Shared entrant builder for both qualifying and sprint qualifying:
-     * F1-series drivers with a current team, plus SETUP focus multiplier on
-     * stat_qualifying. The `practice_focus` table is keyed on (race, driver)
-     * — set once during PRACTICE, applies to both qualifying sessions on a
-     * sprint weekend.
-     */
     private fun readQualifyingEntrants(
         conn: Connection,
         raceId: UUID,
@@ -740,15 +758,6 @@ class GameService(
         }
     }
 
-    /**
-     * Recompute `teams.season_points` from race + sprint results for the
-     * current season. Runs at POST_RACE, so the cache is correct after each
-     * complete race weekend (sprint or standard).
-     *
-     * Note: between SPRINT and RACE on a sprint weekend, the cache is stale
-     * w.r.t. the just-completed sprint. /api/standings computes live from
-     * the same source tables so it's always correct.
-     */
     private fun runPostRaceHook(conn: Connection, state: GameState): List<TransitionEventDto> {
         val updated = conn.prepareStatement(
             """
@@ -798,21 +807,76 @@ class GameService(
 
     private fun runOffSeasonHook(conn: Connection, from: GameState): List<TransitionEventDto> {
         val masterSeed = readMasterSeed(conn)
-        // from.year is the year that just ended.
         val count = offSeasonService.runOffSeasonHooks(conn, from.year, masterSeed)
         return if (count > 0) {
             listOf(
                 TransitionEventDto(
                     "OFF_SEASON_PROCESSED",
-                    "$count off-season events (aging, retirements)",
+                    "$count off-season events (aging, retirements, contract expirations)",
                 ),
             )
         } else emptyList()
     }
 
-    private fun runPreSeasonHook(conn: Connection, to: GameState): List<TransitionEventDto> {
-        // to.year is the new season we're starting (year already bumped in OFF_SEASON
-        // transition, but PRE_SEASON keeps the same year).
+    /**
+     * Fires on OFF_SEASON -> DRIVER_MARKET. The market gets initialized
+     * with the ending season year, ready for the player to submit offers.
+     * `from.year` is the year that just ended (PhaseMachine increments
+     * year on END_OF_SEASON -> OFF_SEASON, so this `from` is post-bump;
+     * the "ending season" we ran finance/aging for is `from.year - 1`).
+     *
+     * Wait — re-checking PhaseMachine: END_OF_SEASON -> OFF_SEASON
+     * increments year. So `from.year` here (OFF_SEASON's year) is the
+     * NEW year. The ending season was `from.year - 1`. Pass that for
+     * consistency with the off-season events log.
+     */
+    private fun runEnterDriverMarketHook(
+        conn: Connection,
+        from: GameState,
+    ): List<TransitionEventDto> {
+        val endingSeasonYear = from.year - 1
+        driverMarketService.initializeMarketForOffSeason(conn, endingSeasonYear)
+        return listOf(
+            TransitionEventDto(
+                "MARKET_INITIALIZED",
+                "Driver market open for off-season ending $endingSeasonYear",
+            ),
+        )
+    }
+
+    /**
+     * Fires on each advance while in DRIVER_MARKET. Resolves one round of
+     * matching and returns events. The decision whether this is the LAST
+     * round (and we should transition to PRE_SEASON) is taken in [advance]
+     * after this hook returns, via [DriverMarketService.isMarketComplete].
+     */
+    private fun runDriverMarketHook(
+        conn: Connection,
+        from: GameState,
+    ): List<TransitionEventDto> {
+        val endingSeasonYear = from.year - 1
+        val masterSeed = readMasterSeed(conn)
+        val signings = driverMarketService.resolveOneRound(
+            conn, endingSeasonYear, masterSeed,
+        )
+        return listOf(
+            TransitionEventDto(
+                "MARKET_ROUND_RESOLVED",
+                "$signings signings this round",
+            ),
+        )
+    }
+
+    private fun runPreSeasonHook(
+        conn: Connection,
+        to: GameState,
+        from: GameState,
+    ): List<TransitionEventDto> {
+        // If we're coming from DRIVER_MARKET, finalize the market state
+        // before running PRE_SEASON's sponsor / cost ticks.
+        if (from.phase == Phase.DRIVER_MARKET) {
+            driverMarketService.finalizeMarket(conn)
+        }
         val count = offSeasonService.runPreSeasonHooks(conn, to.year)
         return if (count > 0) {
             listOf(
@@ -829,7 +893,8 @@ class GameService(
     // ------------------------------------------------------------------
 
     private fun advanceLabel(from: Phase): String = when (from) {
-        Phase.OFF_SEASON -> "Begin pre-season"
+        Phase.OFF_SEASON -> "Open driver market"
+        Phase.DRIVER_MARKET -> "Resolve next market round"
         Phase.PRE_SEASON -> "Start first race weekend"
         Phase.PRACTICE -> "Go to qualifying"
         Phase.QUALIFYING -> "Start the race"

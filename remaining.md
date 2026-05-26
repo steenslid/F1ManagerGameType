@@ -33,12 +33,15 @@ sprints, 5 F1 teams, 10 drivers, 15 personnel, 12 sponsors, 3 engine
 suppliers, 3 Mk1 PUs. Team sponsorships are seeded inline in SeedLoader
 (15 deals across 5 F1 teams for 2026-2027). Names are fictional placeholders.
 
-**Phase machine.** Flat enum, 10 phases. `PhaseMachine.next(state,
-roundsPerSeason, isSprintWeekend)` is pure. `GameService` queries `races` for
-season length and current-round sprint flag, calls PhaseMachine, runs
-transition hooks, ticks `last_played_at`. Sprint weekends (Spielberg,
-Interlagos) properly go through `PRACTICE → SPRINT_QUALIFYING → SPRINT →
-QUALIFYING → RACE`.
+**Phase machine.** Flat enum, 11 phases. `PhaseMachine.next(state,
+roundsPerSeason, isSprintWeekend, isMarketComplete)` is pure.
+`GameService` queries `races` for season length and current-round sprint
+flag, consults `DriverMarketService` for market completion, calls
+PhaseMachine, runs transition hooks, ticks `last_played_at`. Sprint
+weekends (Spielberg, Interlagos) properly go through `PRACTICE →
+SPRINT_QUALIFYING → SPRINT → QUALIFYING → RACE`. Off-season runs
+`END_OF_SEASON → OFF_SEASON → DRIVER_MARKET (N rounds) → PRE_SEASON`.
+DRIVER_MARKET self-loops until `isMarketComplete = true`.
 
 **Race weekend gameplay (complete, sprint and standard).** Qualifying sim,
 race sim, and sprint sim are pure in `RaceSim` (no DB, no logging). Stat
@@ -89,9 +92,10 @@ stats"). `GET /api/standings?type=driver|team|both&season=` returns the
 leaderboard.
 
 **Off-season / year-flip pipeline (7 of 11 steps).** `OffSeasonService`
-owns all year-level hooks. Per-save deterministic via master seed + per-step
-salt constants. Skips END_OF_SEASON / OFF_SEASON hooks if no races were
-simulated (prevents first-advance aging on fresh saves).
+owns year-level hooks; `DriverMarketService` owns the market. Per-save
+deterministic via master seed + per-step salt constants. Skips
+END_OF_SEASON / OFF_SEASON hooks if no races were simulated (prevents
+first-advance aging on fresh saves).
 
 - **END_OF_SEASON hook:**
   - **FOM prize money.** Hardcoded curve P1-P10: $180M/$160M/$140M/$125M/
@@ -112,32 +116,30 @@ simulated (prevents first-advance aging on fresh saves).
     `retired = true`, all team affiliations nulled.
   - **Contract expirations.** Drivers / personnel where
     `contract_expires_year <= endingSeasonYear` and not already retired
-    have their team affiliations nulled (drivers: racing / reserve /
-    academy; personnel: team + role). `contract_expires_year/round` are
-    kept as a historical record. Purely date-driven — no RNG. Runs
-    after retirements so retirees don't double-log.
-  - **Driver market (AI-only v1).** Multi-round (3 rounds) matching
-    between free-agent drivers and teams with open racing seats.
-    Teams iterate in prestige order; for each open seat, team picks
-    top-scoring candidate from the unsigned pool. Mutual-preference
-    filter (driver's top-K teams must include this team) tightens then
-    loosens across rounds: top-3 / top-5 / top-10. Signings get a
-    2-year contract at pace-banded salary scaled by team prestige
-    (`prestige / 75.0` factor). Personnel market and player offers are
-    follow-up slices.
+    have their team affiliations nulled. `contract_expires_year/round`
+    kept as historical record. Purely date-driven — no RNG.
+- **DRIVER_MARKET phase** (between OFF_SEASON and PRE_SEASON):
+  - **Driver market.** New phase. Initialized on entry; each advance
+    resolves one round of matching; auto-exits to PRE_SEASON when
+    `total_rounds` (default 3) have been resolved. Player submits
+    offers between rounds via `/api/market/driver/offers`; AI fills
+    the remaining seats per the same scoring as before (pace + age +
+    morale + noise on the team side, prestige + recent results + noise
+    on the driver side). The player team's seats are reserved for
+    player offers — AI cannot sign drivers to it. Offers cleared at
+    each round resolution. State held in `driver_market_state`
+    (singleton) and `driver_market_offers` tables.
 - **PRE_SEASON hook:**
   - **Sponsor revenue tick.** Sum each team's active sponsorships
     (`start_year <= year <= end_year`), set `current_year_income`. One
     event per team with revenue.
   - **Operating cost tick.** `base_operating_cost + sum(driver salaries
     where racing for team) + sum(personnel salaries where on team)`, set
-    `current_year_expenses`. One event per team. Reflects market
-    signings: drivers signed this off-season have their new salaries
-    counted here.
+    `current_year_expenses`. Reflects market signings (player offer
+    salaries and AI-computed salaries both feed in here).
 
-All hooks log to `off_season_events` (event_type CHECK includes:
-FINANCE_SETTLED, AGE_TICK, STAT_DRIFT, RETIREMENT, CONTRACT_EXPIRED,
-MARKET_SIGNING, SPONSOR_REVENUE, OPERATING_COST). Inside the same
+All off-season hooks log to `off_season_events`. Market signings reuse
+the same table with `event_type = 'MARKET_SIGNING'`. Inside the same
 transaction as the state changes — atomic per advance.
 
 **Economy (v1 balanced).** Top teams clear ~$145M/year surplus; back-of-grid
@@ -165,19 +167,17 @@ table on sprint weekends.
 
 ### Big systems — multiple rounds each
 
-- **Driver market — player offers (slice 2).** AI-only matching exists
-  (free agents → open seats in 3 rounds, mutual-preference matching by
-  prestige / pace). Missing: player makes offers via API, those offers
-  participate in the same matching engine alongside AI proposals, player
-  competes head-to-head with rival teams for top free agents. Endpoints
-  per design doc: `POST /api/market/driver/offer`,
-  `GET /api/market/driver/available`. Probably also needs the market to
-  resolve over multiple `advance` calls (one round per advance) so the
-  player can react between rounds.
 - **Personnel market.** Same mechanics as driver market, smaller pool,
   tier order: principal → TD → strategist → crew chief → race engineers.
-  Once driver market player-offer slice lands, this is mostly copy with
-  different scoring weights.
+  Driver market structure is reusable (`DriverMarketService` pattern,
+  phase split, offer table) — personnel version would be a parallel
+  service with different scoring weights and a different offer table.
+- **Richer counter-bidding.** Closest-prestige AI rival now bumps its
+  scoring on player-contested drivers; that's the v1. Natural
+  extensions: secondary rival also bumps (half-strength), bonus scales
+  with how aggressive the player's offer is (high-salary offers signal
+  importance and provoke harder counters), AI personality
+  (`ai_aggression`) modulates the bump size.
 - **R&D.** `part_versions`, `team_parts_current` (or just MAX(mk_version)
   per supplier-style), `development_projects`. Player allocates R&D budget
   by part type at season start; tick in `BETWEEN_ROUNDS` hook. Design doc
@@ -273,7 +273,9 @@ filter. Unknown value → empty result, no validation error.
 no migration framework — users drop test saves and recreate after schema
 edits. Document what triggered the recreate. (Most recent recreate
 triggers: adding `sprint_results` table; adding `CONTRACT_EXPIRED` and
-`MARKET_SIGNING` to the `off_season_events.event_type` CHECK.)
+`MARKET_SIGNING` to the `off_season_events.event_type` CHECK; adding
+`DRIVER_MARKET` to the `game_phase_valid` CHECK; adding
+`driver_market_state` and `driver_market_offers` tables.)
 
 **Pipeline hook pattern.** `OffSeasonService.runXxxHooks(conn, year, ...)`
 called from the matching transition branch in
@@ -320,27 +322,36 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   `ai_ambition`, `ai_frugality` exist on teams but the v1 market scoring
   ignores them. Frugal teams should low-ball offers; ambitious teams
   should overpay for top talent. Tuning knob for later.
-- **No affordability check in the market.** AI teams sign drivers without
-  consulting `cash_reserves`. With salaries scaled by prestige
-  (`prestige / 75.0`), a top team can run up ~$50M in driver salaries
-  per off-season. Currently this just shows up in next season's
-  operating costs — no veto. A team running deep into the red will keep
-  signing.
+- **AI counter-bidding is minimal.** The closest-prestige AI team to the
+  player gets a +15 score bump on any driver the player has offered for
+  this round. That flips ~half the close head-to-heads. Beyond this one
+  team, AI doesn't react to the player at all — and frugality / ambition
+  still aren't consulted. Tuning levers: `COUNTER_BID_BONUS` size, and
+  whether the second-closest rival should also get a (smaller) bump.
+- **No affordability check in the market.** AI teams sign drivers
+  without consulting `cash_reserves`. Player offers are bounded by SQL
+  CHECK ($100k–$200M) but otherwise unchecked — player can sign Erik
+  Hansson for $200M and the game accepts it. Cost shows up in next
+  season's operating cost tick.
 - **No previous-team loyalty in market.** Drivers don't get a bonus to
-  re-signing with the team that just released them. The contract
-  expiration step nulls `current_racing_team_id`, so there's no easy
-  way to look up "previous team" without parsing the event log. A
-  `previous_team_id` column on drivers (set during contract expiration)
-  would fix this — deferred until the player-offer slice when loyalty
-  matters more.
+  re-signing with the team that just released them. Contract expiration
+  nulls `current_racing_team_id` with no breadcrumb. A
+  `previous_team_id` column would fix this — deferred.
 - **Personnel contracts expire but there's no personnel market.**
-  Personnel released by contract expiration stay unsigned indefinitely.
-  Race / tactical effects don't depend on personnel yet (just pit crew
-  rating, which is on the team) so this is invisible but real.
-- **Empty seats stay empty.** If a team can't find a mutual match for
-  a seat in any of the 3 market rounds, the seat stays vacant. Race sim
-  will just have fewer entrants for that team. Junior promotions (F2 →
-  F1, design doc step 8) are the proper fix.
+  Personnel released by expiration stay unsigned indefinitely. Race
+  effects don't depend on personnel yet (just pit crew rating, which is
+  on the team) so it's invisible but real.
+- **Empty seats stay empty.** Player team's seats specifically are
+  *only* fillable by player offers — AI never poaches into them. If
+  the player skips a market entirely, they go into the season with
+  empty seats and the race sim will run with however many drivers
+  remain on their roster. Junior promotions (F2 → F1) are the proper
+  fix for filling player-skipped seats.
+- **Market state is global to the save.** Only one market can be active
+  at a time (singleton tables). Fine for single-player, but means
+  pausing mid-market and starting a new save can leave orphan offers
+  if anything goes wrong; the initialize step wipes on entry, so
+  recovery is automatic.
 - **All seeded sponsor deals expire 2027.** Without sponsor renewal /
   market, teams will have $0 income in 2028+ until the sponsor market
   lands. Multi-year (3+) playthroughs hit a money cliff.
@@ -415,6 +426,7 @@ src/main/kotlin/f1sim/
 │       ├── RaceWeekendRoutes.kt    # practice + strategy
 │       ├── StandingsRoutes.kt
 │       ├── OffSeasonRoutes.kt      # /api/off-season/report
+│       ├── DriverMarketRoutes.kt   # /api/market/driver/*
 │       ├── TeamSponsorshipRoutes.kt
 │       ├── PowerUnitRoutes.kt
 │       ├── SponsorRoutes.kt
@@ -427,11 +439,12 @@ src/main/kotlin/f1sim/
 │   └── SeedLoader.kt      # JSON → batch insert + computeDerivedSeedValues
 ├── game/
 │   ├── Phase.kt           # enum + GameState
-│   ├── PhaseMachine.kt    # pure next()
+│   ├── PhaseMachine.kt    # pure next() (with isMarketComplete)
 │   ├── GameService.kt     # state I/O, transition hooks
 │   ├── RaceWeekendService.kt   # practice focus + strategy
 │   ├── StandingsService.kt
-│   └── OffSeasonService.kt     # year-flip pipeline
+│   ├── OffSeasonService.kt     # year-flip pipeline
+│   └── DriverMarketService.kt  # driver market lifecycle + matching
 └── sim/
     └── RaceSim.kt         # pure qualifying + race + sprint simulation
 
@@ -444,7 +457,7 @@ src/main/resources/
 
 frontend/
 └── src/
-    ├── App.vue            # tab shell, 11 panels
+    ├── App.vue            # tab shell, 12 panels
     ├── api.js             # backend client, BASE hardcoded
     └── panels/
         ├── SavesPanel.vue
@@ -456,6 +469,7 @@ frontend/
         ├── PracticePanel.vue
         ├── StrategyPanel.vue
         ├── ResultsPanel.vue
+        ├── MarketPanel.vue
         ├── OffSeasonPanel.vue
         └── ReferencePanel.vue
 ```
@@ -501,12 +515,18 @@ frontend/
   cost total. FOM prize at END_OF_SEASON does add (`income += prize`)
   because finance settle hasn't zeroed yet.
 - **OFF_SEASON step order matters.** Aging → retirements → contract
-  expirations → driver market. Retirements run before contract
-  expirations so a retiring driver whose contract also expired ends up
-  flagged retired (not released as a free agent). Driver market runs
-  after both so the free-agent pool is fully populated; the pool query
-  filters out retirees (`NOT retired`) and includes drivers nulled by
-  expiration (`current_racing_team_id IS NULL`).
+  expirations. Retirements run before contract expirations so a retiring
+  driver whose contract also expired ends up flagged retired (not
+  released as a free agent). The expiration query requires
+  `NOT retired AND has-a-team`, so the retiree is naturally skipped.
+  Driver market now runs in its own phase after OFF_SEASON exits, with
+  its own initialize / round / finalize hooks.
+- **DRIVER_MARKET phase is self-looping.** Unlike every other phase,
+  `PhaseMachine.next` from DRIVER_MARKET can return the same phase —
+  the `isMarketComplete` flag from `DriverMarketService` drives the
+  exit. `GameService.advance` runs the round hook BEFORE consulting
+  the machine so the round counter is current. If you add new
+  self-looping phases later, mirror that pattern.
 - **Salt collisions.** All XOR salts must be distinct. Current set:
   `QUALIFYING_SALT`, `RACE_SALT`, `SPRINT_QUALIFYING_SALT`, `SPRINT_SALT`,
   `RETIRE_SALT`, `MARKET_SALT`. When adding new deterministic RNG

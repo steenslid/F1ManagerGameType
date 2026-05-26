@@ -63,6 +63,13 @@ export const api = {
   // Off-season
   getOffSeasonReport: (filter) => request('GET', '/api/off-season/report' + qs(filter)),
 
+  // Driver market
+  getMarketAvailable: () => request('GET', '/api/market/driver/available'),
+  getMarketOffers: () => request('GET', '/api/market/driver/offers'),
+  submitMarketOffer: (req) => request('POST', '/api/market/driver/offers', req),
+  withdrawMarketOffer: (driverId) =>
+    request('DELETE', `/api/market/driver/offers/${driverId}`),
+
   // Resources
   listRaces: (filter) => request('GET', '/api/races' + qs(filter)),
   listRaceResults: (filter) => request('GET', '/api/race-results' + qs(filter)),

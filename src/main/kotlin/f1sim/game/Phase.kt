@@ -8,11 +8,17 @@ package f1sim.game
  * (PRACTICE, QUALIFYING, ..., POST_RACE) so the DB needs to store only one
  * string and transitions stay as a single `when`.
  *
- * SPRINT_QUALIFYING and SPRINT are reserved for when sprint weekends are
- * detected from the calendar. The current standard flow never enters them.
+ * SPRINT_QUALIFYING and SPRINT are entered for races where the calendar's
+ * session_format is SPRINT. Standard weekends skip them.
+ *
+ * DRIVER_MARKET runs between OFF_SEASON and PRE_SEASON. Each advance from
+ * DRIVER_MARKET runs one matching round, until `total_rounds` (default 3)
+ * have completed — then it exits to PRE_SEASON. The player can submit
+ * offers via /api/market/driver/offer between rounds.
  */
 enum class Phase {
     OFF_SEASON,
+    DRIVER_MARKET,
     PRE_SEASON,
     PRACTICE,
     QUALIFYING,
