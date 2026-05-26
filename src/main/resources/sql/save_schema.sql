@@ -212,6 +212,12 @@ CREATE TABLE drivers (
     trait_temperament               NUMERIC(3,2) NOT NULL,
     trait_market_value_modifier     NUMERIC(4,3) NOT NULL,
 
+    -- Last team the driver raced for before becoming a free agent. Set by
+    -- the contract expiration step in OffSeasonService; consulted by the
+    -- driver market as a small "loyalty" bonus in the driver's team-
+    -- preference score. Cleared on retirement (driver permanently gone).
+    previous_team_id                TEXT         REFERENCES teams(id) ON DELETE SET NULL,
+
     CONSTRAINT drivers_age_range CHECK (current_age BETWEEN 14 AND 60),
     CONSTRAINT drivers_morale_range CHECK (morale BETWEEN 0 AND 100),
     CONSTRAINT drivers_stat_pace_range CHECK (stat_pace BETWEEN 0 AND 100),
@@ -228,6 +234,7 @@ CREATE TABLE drivers (
 CREATE INDEX drivers_racing_team_idx ON drivers (current_racing_team_id);
 CREATE INDEX drivers_reserve_team_idx ON drivers (reserve_for_team_id);
 CREATE INDEX drivers_academy_team_idx ON drivers (academy_team_id);
+CREATE INDEX drivers_previous_team_idx ON drivers (previous_team_id);
 
 CREATE TABLE personnel (
     id                              UUID         PRIMARY KEY,

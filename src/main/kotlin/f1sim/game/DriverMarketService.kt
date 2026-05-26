@@ -475,6 +475,8 @@ class DriverMarketService(private val db: Database) {
         val statPace: Int,
         val currentAge: Int,
         val morale: Int,
+        val previousTeamId: String?,
+        val marketValueModifier: Double,
     )
 
     private data class MarketTeam(
@@ -503,7 +505,8 @@ class DriverMarketService(private val db: Database) {
     private fun readFreeAgentsForMatching(conn: Connection): List<MarketAgent> {
         return conn.prepareStatement(
             """
-            SELECT id, name, stat_pace, current_age, morale
+            SELECT id, name, stat_pace, current_age, morale,
+                   previous_team_id, trait_market_value_modifier
               FROM drivers
              WHERE NOT retired
                AND current_racing_team_id IS NULL
@@ -521,6 +524,8 @@ class DriverMarketService(private val db: Database) {
                                 statPace = rs.getInt("stat_pace"),
                                 currentAge = rs.getInt("current_age"),
                                 morale = rs.getInt("morale"),
+                                previousTeamId = rs.getString("previous_team_id"),
+                                marketValueModifier = rs.getDouble("trait_market_value_modifier"),
                             )
                         )
                     }
@@ -596,7 +601,8 @@ class DriverMarketService(private val db: Database) {
               current_racing_team_id = ?,
               contract_expires_year = ?,
               contract_expires_round = ?,
-              current_salary = ?
+              current_salary = ?,
+              previous_team_id = NULL
              WHERE id = ?
             """.trimIndent()
         ).use { stmt ->
@@ -667,12 +673,22 @@ class DriverMarketService(private val db: Database) {
         return skill * 0.7 + ageOpt * 0.5 + morale * 0.2 + noise + counter
     }
 
+    /**
+     * Driver's preference score for a team.
+     *
+     *   prestige   : the dominant term — drivers chase top teams
+     *   performance: recent results (just-ended season's points)
+     *   loyalty    : small bump when this is the team the driver just came
+     *                from. Helps re-signings feel natural without locking
+     *                them in — a top-tier rival can still poach.
+     *   noise      : RNG spice
+     */
     private fun driverScore(agent: MarketAgent, team: MarketTeam, rng: Random): Double {
-        @Suppress("UNUSED_PARAMETER") agent
         val prestige = (team.prestige - 50).toDouble()
         val performance = team.seasonPoints / 20.0
+        val loyalty = if (agent.previousTeamId == team.id) LOYALTY_BONUS else 0.0
         val noise = rng.nextDouble() * 5.0
-        return prestige * 0.6 + performance * 0.3 + noise
+        return prestige * 0.6 + performance * 0.3 + loyalty + noise
     }
 
     private fun computeAiSalary(agent: MarketAgent, team: MarketTeam): Long {
@@ -683,7 +699,10 @@ class DriverMarketService(private val db: Database) {
             else -> 500_000L
         }
         val prestigeFactor = team.prestige / 75.0
-        return (base * prestigeFactor).toLong()
+        // Per-driver "market value" multiplier. Generational talents
+        // (~1.30) command a premium; journeymen (~0.90) sign for less.
+        // From driver seed `trait_market_value_modifier`.
+        return (base * prestigeFactor * agent.marketValueModifier).toLong()
     }
 
     /**
@@ -882,5 +901,13 @@ class DriverMarketService(private val db: Database) {
          * flip close calls but doesn't dominate raw skill differences.
          */
         const val COUNTER_BID_BONUS = 15.0
+
+        /**
+         * Bonus added to a driver's preference score for the team they were
+         * just released from. Sized slightly larger than driverScore's noise
+         * term (5.0) — enough to break ties toward the prior team but small
+         * enough that a meaningfully more prestigious rival still wins.
+         */
+        const val LOYALTY_BONUS = 8.0
     }
 }

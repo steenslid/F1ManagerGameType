@@ -130,13 +130,20 @@ first-advance aging on fresh saves).
     each round resolution. State held in `driver_market_state`
     (singleton) and `driver_market_offers` tables.
 - **PRE_SEASON hook:**
+  - **Sponsor renewal stub.** Lapsed deals (`end_year < new_season_year`,
+    and `>= new_season_year - 1` to keep it just-expired) auto-renew at
+    `oldValue * (0.9..1.1)` for `SPONSOR_RENEWAL_TERM_YEARS = 2` more
+    years. Per-deal RNG keyed on `deal.id XOR year XOR SPONSOR_RENEW_SALT`
+    for replay parity. Logged as `SPONSOR_REVENUE` event_type with a
+    "renewed" disambiguator (avoids a CHECK constraint update).
   - **Sponsor revenue tick.** Sum each team's active sponsorships
     (`start_year <= year <= end_year`), set `current_year_income`. One
     event per team with revenue.
-  - **Operating cost tick.** `base_operating_cost + sum(driver salaries
-    where racing for team) + sum(personnel salaries where on team)`, set
-    `current_year_expenses`. Reflects market signings (player offer
-    salaries and AI-computed salaries both feed in here).
+  - **Operating cost tick.** `base_operating_cost + academy_investment +
+    sum(driver salaries where racing for team) + sum(personnel salaries
+    where on team)`, set `current_year_expenses`. Reflects market
+    signings (player offer salaries and AI-computed salaries both feed
+    in here).
 
 All off-season hooks log to `off_season_events`. Market signings reuse
 the same table with `event_type = 'MARKET_SIGNING'`. Inside the same
@@ -224,12 +231,10 @@ table on sprint weekends.
 
 ### Loose ends — less than a round
 
-- Sponsor renewal at deal expiration (all current deals end 2027 — without
-  renewal, teams get $0 income in 2028+).
 - Sponsor performance bonuses / defection (real revenue should vary with
   results).
-- Academy investment as a real expense line (`teams.academy_investment`
-  exists but isn't consumed).
+- New sponsor entrants joining the pool yearly (current renewal stub
+  only extends existing deals; the sponsor table stays static).
 - Aging stat drift for stats beyond `stat_pace` / `skill_design` (other
   driver stats currently don't drift).
 - Injuries / suspensions (post-race hook).
@@ -275,7 +280,8 @@ edits. Document what triggered the recreate. (Most recent recreate
 triggers: adding `sprint_results` table; adding `CONTRACT_EXPIRED` and
 `MARKET_SIGNING` to the `off_season_events.event_type` CHECK; adding
 `DRIVER_MARKET` to the `game_phase_valid` CHECK; adding
-`driver_market_state` and `driver_market_offers` tables.)
+`driver_market_state` and `driver_market_offers` tables; adding
+`previous_team_id` column to `drivers`.)
 
 **Pipeline hook pattern.** `OffSeasonService.runXxxHooks(conn, year, ...)`
 called from the matching transition branch in
@@ -307,6 +313,7 @@ where contextKey distinguishes purpose. Salts:
 - `SPRINT_SALT = 0xACE0FB21L` (sprint race sim)
 - `RETIRE_SALT = 0x4E71_4E72_4E73_4E74L` (retirement rolls)
 - `MARKET_SALT = 0x6D61_726B_6574_5341L` (driver market scoring)
+- `SPONSOR_RENEW_SALT = 0x53504F4E_524E5731L` (sponsor deal renewal noise)
 
 For per-entity rolls (retirement), additionally XOR `entityId.hashCode()`
 so each entity gets independent randomness deterministically tied to its
@@ -333,10 +340,19 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   CHECK ($100k–$200M) but otherwise unchecked — player can sign Erik
   Hansson for $200M and the game accepts it. Cost shows up in next
   season's operating cost tick.
-- **No previous-team loyalty in market.** Drivers don't get a bonus to
-  re-signing with the team that just released them. Contract expiration
-  nulls `current_racing_team_id` with no breadcrumb. A
-  `previous_team_id` column would fix this — deferred.
+- **Loyalty effect is small.** Drivers get a +8 driver-side score bump
+  when scoring the team that just released them, recorded via
+  `drivers.previous_team_id` (set on expiration, cleared on retirement
+  and on a new signing). Tuned to break ties — a more prestigious rival
+  still wins. Loyalty doesn't yet interact with team-side scoring (a
+  team isn't biased toward re-signing its own drivers) or with the
+  driver's `trait_loyalty` hidden stat.
+- **`trait_market_value_modifier` only affects AI salary offers.**
+  `DriverMarketService.computeAiSalary` now multiplies by the trait —
+  generational talents (~1.30) cost premium teams more; journeymen
+  (~0.90) sign for less. Player offers don't validate against this
+  (the player can still try to lowball a star). Could be surfaced as a
+  scout-report hint, since otherwise the trait is invisible.
 - **Personnel contracts expire but there's no personnel market.**
   Personnel released by expiration stay unsigned indefinitely. Race
   effects don't depend on personnel yet (just pit crew rating, which is
@@ -352,13 +368,16 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   pausing mid-market and starting a new save can leave orphan offers
   if anything goes wrong; the initialize step wipes on entry, so
   recovery is automatic.
-- **All seeded sponsor deals expire 2027.** Without sponsor renewal /
-  market, teams will have $0 income in 2028+ until the sponsor market
-  lands. Multi-year (3+) playthroughs hit a money cliff.
+- **Sponsor renewal is a flat stub.** Lapsed deals auto-renew at
+  `oldValue * (0.9..1.1)` for `SPONSOR_RENEWAL_TERM_YEARS = 2` years
+  via `OffSeasonService.renewSponsors` (step 4b, PRE_SEASON). No
+  defection on poor performance, no new sponsor entrants joining the
+  pool, no negotiation surface for the player. Multi-year saves no
+  longer hit the money cliff but the income line is roughly flat.
 - **`current_year_expenses` lacks R&D and engine costs.** Once R&D
   lands, expense math needs an additional term. Currently:
-  `base_operating_cost + driver_salaries + personnel_salaries`.
-- **`teams.academy_investment` is dead.** Field exists, no flow uses it.
+  `base_operating_cost + academy_investment + driver_salaries +
+  personnel_salaries`.
 - **FOM prize curve is generous for sparse grids.** With 5 teams, the
   top end pays out heavily ($715M total to 5 teams). When F2 promotions
   add more teams, the same curve spread across 10 teams will feel
@@ -529,7 +548,7 @@ frontend/
   self-looping phases later, mirror that pattern.
 - **Salt collisions.** All XOR salts must be distinct. Current set:
   `QUALIFYING_SALT`, `RACE_SALT`, `SPRINT_QUALIFYING_SALT`, `SPRINT_SALT`,
-  `RETIRE_SALT`, `MARKET_SALT`. When adding new deterministic RNG
+  `RETIRE_SALT`, `MARKET_SALT`, `SPONSOR_RENEW_SALT`. When adding new deterministic RNG
   contexts (e.g. personnel market, junior promotions), pick a new
   constant.
 - **Sprint standings aggregation uses MAX, not SUM.** In `StandingsService`

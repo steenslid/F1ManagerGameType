@@ -31,9 +31,11 @@ import kotlin.random.Random
  *        between OFF_SEASON and PRE_SEASON.
  *
  *   PRE_SEASON hooks (the new year about to start):
+ *     4b. Sponsor renewals — extend lapsed deals at ~same value so teams
+ *         keep their income stream going. Stub for a real sponsor market.
  *     6. Sponsor revenue tick — sum active sponsorships, set current_year_income.
- *     7. Operating cost tick — base_operating_cost + driver salaries +
- *        personnel salaries, set current_year_expenses.
+ *     7. Operating cost tick — base_operating_cost + academy_investment +
+ *        driver salaries + personnel salaries, set current_year_expenses.
  *
  * Remaining steps stubbed: personnel market, sponsor market, junior
  * promotions, regulation reset, board review, calendar generation.
@@ -84,12 +86,13 @@ class OffSeasonService(private val db: Database) {
      * fill in income (sponsor revenue) and expenses (base + salaries).
      */
     fun runPreSeasonHooks(conn: Connection, newSeasonYear: Int): Int {
+        val renewalEvents = renewSponsors(conn, newSeasonYear)
         val revenueEvents = applySponsorRevenueTick(conn, newSeasonYear)
         val costEvents = applyOperatingCostsTick(conn, newSeasonYear)
-        val total = revenueEvents + costEvents
+        val total = renewalEvents + revenueEvents + costEvents
         log.info(
-            "PRE_SEASON {}: {} sponsor revenue events, {} operating cost events",
-            newSeasonYear, revenueEvents, costEvents,
+            "PRE_SEASON {}: {} sponsor renewals, {} sponsor revenue events, {} operating cost events",
+            newSeasonYear, renewalEvents, revenueEvents, costEvents,
         )
         return total
     }
@@ -374,7 +377,8 @@ class OffSeasonService(private val db: Database) {
               retired = TRUE,
               current_racing_team_id = NULL,
               reserve_for_team_id = NULL,
-              academy_team_id = NULL
+              academy_team_id = NULL,
+              previous_team_id = NULL
              WHERE id = ?
             """.trimIndent()
         ).use { stmt ->
@@ -546,6 +550,7 @@ class OffSeasonService(private val db: Database) {
         conn.prepareStatement(
             """
             UPDATE drivers SET
+              previous_team_id = COALESCE(current_racing_team_id, previous_team_id),
               current_racing_team_id = NULL,
               reserve_for_team_id = NULL,
               academy_team_id = NULL
@@ -640,6 +645,116 @@ class OffSeasonService(private val db: Database) {
     }
 
     // ------------------------------------------------------------------
+    // Step 4b: Sponsor renewals (PRE_SEASON — runs before revenue tick)
+    // ------------------------------------------------------------------
+
+    /**
+     * Renewal stub: any deal whose `end_year` is before the new season year
+     * (so it's just expired) gets auto-renewed for [SPONSOR_RENEWAL_TERM_YEARS]
+     * years at the same annual value, plus a small ±10% noise. Real sponsor
+     * markets (re-evaluation, defection on poor performance, new entrants)
+     * are a follow-up; this just keeps the income lights on.
+     *
+     * Determinism is keyed on the deal id so renewals across saves/replays
+     * are stable.
+     */
+    private fun renewSponsors(conn: Connection, newSeasonYear: Int): Int {
+        data class Lapsed(
+            val id: Long,
+            val teamId: String,
+            val teamName: String,
+            val sponsorName: String,
+            val oldEndYear: Int,
+            val oldValue: Long,
+        )
+
+        val lapsed = conn.prepareStatement(
+            """
+            SELECT ts.id, ts.team_id, t.name AS team_name,
+                   s.name AS sponsor_name,
+                   ts.end_year, ts.annual_value
+              FROM team_sponsorships ts
+              JOIN teams t   ON t.id = ts.team_id
+              JOIN sponsors s ON s.id = ts.sponsor_id
+             WHERE ts.end_year < ?
+               AND ts.end_year >= ?
+            """.trimIndent()
+        ).use { stmt ->
+            // The second filter constrains us to "just-expired" deals (ended
+            // last season) — older lapsed deals stay lapsed. Keeps the
+            // renewal step idempotent across replays even though it's not
+            // RNG-deterministic per-deal beyond the noise seed.
+            stmt.setInt(1, newSeasonYear)
+            stmt.setInt(2, newSeasonYear - 1)
+            stmt.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            Lapsed(
+                                id = rs.getLong("id"),
+                                teamId = rs.getString("team_id"),
+                                teamName = rs.getString("team_name"),
+                                sponsorName = rs.getString("sponsor_name"),
+                                oldEndYear = rs.getInt("end_year"),
+                                oldValue = rs.getLong("annual_value"),
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        if (lapsed.isEmpty()) return 0
+
+        // Per-deal RNG so renewals are stable across replays: same deal id +
+        // same renewal year = same noise. Reuses the deterministic-seeding
+        // pattern from retirement rolls.
+        val renewals = lapsed.map { d ->
+            val rng = kotlin.random.Random(
+                SPONSOR_RENEW_SALT xor d.id xor newSeasonYear.toLong()
+            )
+            val noise = 0.9 + rng.nextDouble() * 0.2  // [0.9, 1.1)
+            val newValue = (d.oldValue * noise).toLong().coerceAtLeast(MIN_RENEWAL_VALUE)
+            val newEnd = newSeasonYear + SPONSOR_RENEWAL_TERM_YEARS - 1
+            Triple(d, newValue, newEnd)
+        }
+
+        conn.prepareStatement(
+            """
+            UPDATE team_sponsorships SET
+              start_year = ?,
+              end_year = ?,
+              annual_value = ?
+             WHERE id = ?
+            """.trimIndent()
+        ).use { stmt ->
+            renewals.forEach { (d, newValue, newEnd) ->
+                stmt.setInt(1, newSeasonYear)
+                stmt.setInt(2, newEnd)
+                stmt.setLong(3, newValue)
+                stmt.setLong(4, d.id)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        }
+
+        // Log under SPONSOR_REVENUE — it's the same conceptual bucket and
+        // avoids another CHECK update. The message disambiguates.
+        logEvents(
+            conn, newSeasonYear,
+            renewals.map { (d, newValue, newEnd) ->
+                EventToLog(
+                    "SPONSOR_REVENUE", "TEAM", d.teamId, d.teamName,
+                    "${d.teamName}: ${d.sponsorName} renewed " +
+                        "($${d.oldValue} → $${newValue}/yr) through $newEnd",
+                )
+            },
+        )
+
+        return renewals.size
+    }
+
+    // ------------------------------------------------------------------
     // Step 5: Sponsor revenue tick (PRE_SEASON)
     // ------------------------------------------------------------------
 
@@ -723,15 +838,17 @@ class OffSeasonService(private val db: Database) {
     // ------------------------------------------------------------------
 
     /**
-     * For each F1 team: cost = base_operating_cost + sum(driver salaries) +
-     * sum(personnel salaries), where only non-retired entities currently
-     * attached to the team count. Applied to current_year_expenses.
+     * For each F1 team: cost = base_operating_cost + academy_investment +
+     * sum(driver salaries) + sum(personnel salaries), where only non-retired
+     * entities currently attached to the team count. Applied to
+     * current_year_expenses.
      */
     private fun applyOperatingCostsTick(conn: Connection, seasonYear: Int): Int {
         data class TeamCost(
             val teamId: String,
             val teamName: String,
             val base: Long,
+            val academy: Long,
             val driverSalaries: Long,
             val personnelSalaries: Long,
             val total: Long,
@@ -744,6 +861,7 @@ class OffSeasonService(private val db: Database) {
             SELECT t.id AS team_id, t.name AS team_name,
                    t.current_year_expenses AS old_expenses,
                    t.base_operating_cost AS base_cost,
+                   t.academy_investment AS academy_cost,
                    COALESCE(driver_sum.salaries, 0) AS driver_salaries,
                    COALESCE(personnel_sum.salaries, 0) AS personnel_salaries
               FROM teams t
@@ -769,14 +887,16 @@ class OffSeasonService(private val db: Database) {
                     while (rs.next()) {
                         val oldExpenses = rs.getLong("old_expenses")
                         val base = rs.getLong("base_cost")
+                        val academy = rs.getLong("academy_cost")
                         val driverSalaries = rs.getLong("driver_salaries")
                         val personnelSalaries = rs.getLong("personnel_salaries")
-                        val total = base + driverSalaries + personnelSalaries
+                        val total = base + academy + driverSalaries + personnelSalaries
                         add(
                             TeamCost(
                                 teamId = rs.getString("team_id"),
                                 teamName = rs.getString("team_name"),
                                 base = base,
+                                academy = academy,
                                 driverSalaries = driverSalaries,
                                 personnelSalaries = personnelSalaries,
                                 total = total,
@@ -808,7 +928,8 @@ class OffSeasonService(private val db: Database) {
             updates.map { u ->
                 EventToLog(
                     "OPERATING_COST", "TEAM", u.teamId, u.teamName,
-                    "${u.teamName}: base $${u.base} + drivers $${u.driverSalaries} + " +
+                    "${u.teamName}: base $${u.base} + academy $${u.academy} + " +
+                        "drivers $${u.driverSalaries} + " +
                         "personnel $${u.personnelSalaries} = $${u.total} " +
                         "→ current_year_expenses $${u.newExpenses}",
                 )
@@ -872,5 +993,9 @@ class OffSeasonService(private val db: Database) {
 
     private companion object {
         const val RETIRE_SALT = 0x4E71_4E72_4E73_4E74L
+        const val SPONSOR_RENEW_SALT = 0x53504F4E_524E5731L  // "SPON_RNW1"
+
+        const val SPONSOR_RENEWAL_TERM_YEARS = 2
+        const val MIN_RENEWAL_VALUE = 500_000L
     }
 }
