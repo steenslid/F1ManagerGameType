@@ -1,5 +1,6 @@
 package f1sim.seed
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -31,6 +32,7 @@ class SeedLoader {
 
     private val log = LoggerFactory.getLogger(SeedLoader::class.java)
 
+    @OptIn(ExperimentalSerializationApi::class)
     private val json = Json {
         namingStrategy = JsonNamingStrategy.SnakeCase
         ignoreUnknownKeys = true
