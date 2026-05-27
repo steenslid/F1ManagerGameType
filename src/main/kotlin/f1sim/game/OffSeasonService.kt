@@ -512,6 +512,25 @@ class OffSeasonService(private val db: Database) {
             val contractYear: Int,
         )
 
+        // One-cycle loyalty reset: any driver who entered THIS off-season
+        // already unsigned (no racing team) had their chance in the prior
+        // year's market and either wasn't picked or chose not to sign. The
+        // `previous_team_id` they carry is stale — clear it so the upcoming
+        // market doesn't keep nudging them toward a team they've effectively
+        // moved on from. This runs before the new expiries set fresh
+        // previous_team_id values, so newly-released drivers are unaffected.
+        val staleCleared = conn.prepareStatement(
+            """
+            UPDATE drivers SET previous_team_id = NULL
+             WHERE NOT retired
+               AND current_racing_team_id IS NULL
+               AND previous_team_id IS NOT NULL
+            """.trimIndent()
+        ).use { it.executeUpdate() }
+        if (staleCleared > 0) {
+            log.info("Cleared stale previous_team_id for {} drivers", staleCleared)
+        }
+
         // Only drivers with some team affiliation at all — pure free agents
         // (no racing / reserve / academy team) have nothing to release.
         val expiries = conn.prepareStatement(

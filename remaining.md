@@ -344,13 +344,13 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   Driver side: `LOYALTY_BONUS = 8.0 × trait_loyalty` when scoring their
   previous team. Team side: `TEAM_LOYALTY_BONUS = 10.0 × trait_loyalty`
   when scoring a driver it just released. Previous-team relationship
-  tracked via `drivers.previous_team_id` (set on expiration, cleared on
-  retirement and on a new signing). A very loyal (0.9) veteran feels
-  the full pull; a 0.2-loyalty hothead barely registers. Tuned so a
-  more-prestigious rival can still poach loyal drivers, but mid-tier
-  teams gain a real edge re-signing their own. Note: a driver who goes
-  unsigned through a full market still carries `previous_team_id`
-  into the next year — could be reset for one-cycle-only loyalty.
+  tracked via `drivers.previous_team_id`: set on contract expiration,
+  cleared on retirement, cleared on a new signing, and cleared for any
+  driver who entered the off-season already unsigned (one-cycle reset
+  at the top of `expireDriverContracts`). A very loyal (0.9) veteran
+  feels the full pull; a 0.2-loyalty hothead barely registers. Tuned
+  so a more-prestigious rival can still poach loyal drivers, but
+  mid-tier teams gain a real edge re-signing their own.
 - **AI salary offers are scaled by talent and age, but player offers
   aren't validated against either.** `DriverMarketService.computeAiSalary`
   multiplies the base bracket by three factors: team prestige
