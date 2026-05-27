@@ -353,14 +353,19 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   mid-tier teams gain a real edge re-signing their own.
 - **AI salary offers are scaled by talent and age, but player offers
   aren't validated against either.** `DriverMarketService.computeAiSalary`
-  multiplies the base bracket by three factors: team prestige
+  multiplies the base bracket by four factors: team prestige
   (`prestige / 75.0`), `trait_market_value_modifier`
-  (generational ~1.30, journeyman ~0.90), and an age decay
-  (`1 - 0.05 * years_past_trait_peak_age`, floored at 0.50). Player
-  offers go through `MIN_OFFER_SALARY = 100k` only — the player can
-  still try to lowball a star or massively overpay a veteran. Could
-  surface the trait + age factor as a scout-report hint, since those
-  signals are otherwise invisible to the player.
+  (generational ~1.30, journeyman ~0.90), age decay
+  (`1 - 0.05 * years_past_trait_peak_age`, floored at 0.50), and a
+  per-(agent, team, round) salary noise of ±5% so equal-prestige rivals
+  don't quote identical numbers. Noise is seeded from
+  `MARKET_SALT xor agent.id.leastSignificantBits xor team.id.hashCode() xor round`
+  for replay parity, and uses its own RNG rather than drawing from the
+  outer market RNG to avoid shifting state on subsequent matching
+  draws. Player offers go through `MIN_OFFER_SALARY = 100k` only — the
+  player can still try to lowball a star or massively overpay a
+  veteran. Could surface the trait + age factors as a scout-report
+  hint, since those signals are otherwise invisible to the player.
 - **Personnel contracts expire but there's no personnel market.**
   Personnel released by expiration stay unsigned indefinitely. Race
   effects don't depend on personnel yet (just pit crew rating, which is

@@ -419,7 +419,7 @@ class DriverMarketService(private val db: Database) {
                     signings += MarketSigning(
                         agent = candidate,
                         team = team,
-                        salary = computeAiSalary(candidate, team),
+                        salary = computeAiSalary(candidate, team, round),
                         expiresYear = endingSeasonYear + DEFAULT_CONTRACT_YEARS,
                         playerOffer = false,
                         counterBid = isCounter,
@@ -704,7 +704,7 @@ class DriverMarketService(private val db: Database) {
         return prestige * 0.6 + performance * 0.3 + loyalty + noise
     }
 
-    private fun computeAiSalary(agent: MarketAgent, team: MarketTeam): Long {
+    private fun computeAiSalary(agent: MarketAgent, team: MarketTeam, round: Int): Long {
         val base = when {
             agent.statPace >= 90 -> 20_000_000L
             agent.statPace >= 80 -> 8_000_000L
@@ -723,7 +723,19 @@ class DriverMarketService(private val db: Database) {
         // at the same pace.
         val yearsPastPeak = (agent.currentAge - agent.peakAge).coerceAtLeast(0)
         val ageFactor = (1.0 - yearsPastPeak * AGE_DECAY_PER_YEAR).coerceAtLeast(MIN_AGE_FACTOR)
-        return (base * prestigeFactor * valueModifier * ageFactor).toLong()
+        // Per-(agent, team, round) RNG so two equal-prestige rival teams
+        // don't quote the same exact number. Seeded locally rather than
+        // drawn from the outer market RNG — otherwise this would shift
+        // RNG state for subsequent scoring/signing draws and changing
+        // the salary calculation could quietly alter signing outcomes.
+        val noiseRng = Random(
+            MARKET_SALT xor
+                agent.id.leastSignificantBits xor
+                team.id.hashCode().toLong() xor
+                round.toLong()
+        )
+        val noiseFactor = 1.0 - SALARY_NOISE_PCT + noiseRng.nextDouble() * 2.0 * SALARY_NOISE_PCT
+        return (base * prestigeFactor * valueModifier * ageFactor * noiseFactor).toLong()
     }
 
     /**
@@ -956,5 +968,13 @@ class DriverMarketService(private val db: Database) {
          * flattens here.
          */
         const val MIN_AGE_FACTOR = 0.50
+
+        /**
+         * Half-width of the per-(agent, team, round) AI salary noise band.
+         * 0.05 → final salary lands in [base × 0.95, base × 1.05]. Small
+         * enough not to upset the brackets, big enough that two equal-
+         * prestige rival teams quote noticeably different numbers.
+         */
+        const val SALARY_NOISE_PCT = 0.05
     }
 }
