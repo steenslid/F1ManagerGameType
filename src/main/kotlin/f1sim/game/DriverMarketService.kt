@@ -478,6 +478,7 @@ class DriverMarketService(private val db: Database) {
         val morale: Int,
         val previousTeamId: String?,
         val marketValueModifier: Double,
+        val traitLoyalty: Double,
     )
 
     private data class MarketTeam(
@@ -507,7 +508,7 @@ class DriverMarketService(private val db: Database) {
         return conn.prepareStatement(
             """
             SELECT id, name, stat_pace, current_age, trait_peak_age, morale,
-                   previous_team_id, trait_market_value_modifier
+                   previous_team_id, trait_market_value_modifier, trait_loyalty
               FROM drivers
              WHERE NOT retired
                AND current_racing_team_id IS NULL
@@ -528,6 +529,7 @@ class DriverMarketService(private val db: Database) {
                                 morale = rs.getInt("morale"),
                                 previousTeamId = rs.getString("previous_team_id"),
                                 marketValueModifier = rs.getDouble("trait_market_value_modifier"),
+                                traitLoyalty = rs.getDouble("trait_loyalty"),
                             )
                         )
                     }
@@ -671,8 +673,14 @@ class DriverMarketService(private val db: Database) {
         val morale = (agent.morale - 50).toDouble()
         val noise = rng.nextDouble() * 10.0
         val counter = if (isCounterBidTarget) COUNTER_BID_BONUS else 0.0
-        @Suppress("UNUSED_PARAMETER") team
-        return skill * 0.7 + ageOpt * 0.5 + morale * 0.2 + noise + counter
+        // Team-side loyalty: a team gets a bump for keeping a driver it
+        // just released. Weighted by the driver's trait_loyalty — keeping
+        // a 0.9-loyalty veteran feels valuable (continuity, sponsor fit);
+        // keeping a 0.2-loyalty hothead barely registers.
+        val loyalty = if (agent.previousTeamId == team.id) {
+            TEAM_LOYALTY_BONUS * agent.traitLoyalty
+        } else 0.0
+        return skill * 0.7 + ageOpt * 0.5 + morale * 0.2 + noise + counter + loyalty
     }
 
     /**
@@ -680,15 +688,18 @@ class DriverMarketService(private val db: Database) {
      *
      *   prestige   : the dominant term — drivers chase top teams
      *   performance: recent results (just-ended season's points)
-     *   loyalty    : small bump when this is the team the driver just came
-     *                from. Helps re-signings feel natural without locking
-     *                them in — a top-tier rival can still poach.
+     *   loyalty    : bump when this is the team the driver just came from,
+     *                weighted by the driver's trait_loyalty (0..1). A
+     *                very-loyal driver feels the full pull of their old
+     *                team; a fickle one barely cares.
      *   noise      : RNG spice
      */
     private fun driverScore(agent: MarketAgent, team: MarketTeam, rng: Random): Double {
         val prestige = (team.prestige - 50).toDouble()
         val performance = team.seasonPoints / 20.0
-        val loyalty = if (agent.previousTeamId == team.id) LOYALTY_BONUS else 0.0
+        val loyalty = if (agent.previousTeamId == team.id) {
+            LOYALTY_BONUS * agent.traitLoyalty
+        } else 0.0
         val noise = rng.nextDouble() * 5.0
         return prestige * 0.6 + performance * 0.3 + loyalty + noise
     }
@@ -914,11 +925,21 @@ class DriverMarketService(private val db: Database) {
 
         /**
          * Bonus added to a driver's preference score for the team they were
-         * just released from. Sized slightly larger than driverScore's noise
-         * term (5.0) — enough to break ties toward the prior team but small
-         * enough that a meaningfully more prestigious rival still wins.
+         * just released from, multiplied by `trait_loyalty` (0..1). Sized
+         * slightly larger than driverScore's noise term (5.0) — enough to
+         * break ties toward the prior team but small enough that a
+         * meaningfully more prestigious rival still wins.
          */
         const val LOYALTY_BONUS = 8.0
+
+        /**
+         * Bonus added to a team's preference score for re-signing a driver
+         * it just released, multiplied by `trait_loyalty` (0..1). Slightly
+         * higher than driver-side because the team-side score has a larger
+         * noise term (0..10) and a larger absolute skill range, so the
+         * bonus needs more weight to register as a real factor.
+         */
+        const val TEAM_LOYALTY_BONUS = 10.0
 
         /**
          * AI salary decay per year past `trait_peak_age`. Applied in

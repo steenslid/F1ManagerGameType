@@ -340,13 +340,17 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   CHECK ($100k–$200M) but otherwise unchecked — player can sign Erik
   Hansson for $200M and the game accepts it. Cost shows up in next
   season's operating cost tick.
-- **Loyalty effect is small.** Drivers get a +8 driver-side score bump
-  when scoring the team that just released them, recorded via
-  `drivers.previous_team_id` (set on expiration, cleared on retirement
-  and on a new signing). Tuned to break ties — a more prestigious rival
-  still wins. Loyalty doesn't yet interact with team-side scoring (a
-  team isn't biased toward re-signing its own drivers) or with the
-  driver's `trait_loyalty` hidden stat.
+- **Loyalty effect applies on both sides, weighted by `trait_loyalty`.**
+  Driver side: `LOYALTY_BONUS = 8.0 × trait_loyalty` when scoring their
+  previous team. Team side: `TEAM_LOYALTY_BONUS = 10.0 × trait_loyalty`
+  when scoring a driver it just released. Previous-team relationship
+  tracked via `drivers.previous_team_id` (set on expiration, cleared on
+  retirement and on a new signing). A very loyal (0.9) veteran feels
+  the full pull; a 0.2-loyalty hothead barely registers. Tuned so a
+  more-prestigious rival can still poach loyal drivers, but mid-tier
+  teams gain a real edge re-signing their own. Note: a driver who goes
+  unsigned through a full market still carries `previous_team_id`
+  into the next year — could be reset for one-cycle-only loyalty.
 - **AI salary offers are scaled by talent and age, but player offers
   aren't validated against either.** `DriverMarketService.computeAiSalary`
   multiplies the base bracket by three factors: team prestige
