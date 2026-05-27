@@ -923,7 +923,7 @@ class DriverMarketService(private val db: Database) {
         const val CONTRACT_END_ROUND = 24
 
         const val MIN_OFFER_SALARY = 500_000L
-        const val MAX_OFFER_SALARY = 200_000_000L
+        const val MAX_OFFER_SALARY = 75_000_000L
         const val MIN_CONTRACT_YEARS = 1
         const val MAX_CONTRACT_YEARS = 5
 

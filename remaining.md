@@ -338,9 +338,12 @@ preservation. No client-side mirror of "loaded save" — query the backend.
 - **No affordability check in the market.** AI teams sign drivers
   without consulting `cash_reserves`. Player offers are bounded by
   `MIN_OFFER_SALARY = 500k` (aligned with `MIN_RENEWAL_VALUE`) and
-  `MAX_OFFER_SALARY = 200M` but otherwise unchecked — player can sign
-  Erik Hansson for $200M and the game accepts it. Cost shows up in
-  next season's operating cost tick.
+  `MAX_OFFER_SALARY = 75M` but otherwise unchecked — player can sign
+  Erik Hansson for $75M and the game accepts it. Cost shows up in
+  next season's operating cost tick. AI offers in practice top out
+  around $33M (max base × max prestige × max trait_market_value_modifier),
+  so 75M gives the player ~2x headroom for impulse buys without
+  permitting the old $200M troll signing.
 - **Loyalty effect applies on both sides, weighted by `trait_loyalty`.**
   Driver side: `LOYALTY_BONUS = 8.0 × trait_loyalty` when scoring their
   previous team. Team side: `TEAM_LOYALTY_BONUS = 10.0 × trait_loyalty`
