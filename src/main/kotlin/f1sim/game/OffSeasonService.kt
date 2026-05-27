@@ -725,6 +725,13 @@ class OffSeasonService(private val db: Database) {
 
         if (lapsed.isEmpty()) return 0
 
+        // Performance modifier: sponsors renew at a premium for teams that
+        // finished high in the WCC last season, at a discount for teams
+        // that finished low. Maps top-ranked → +SPONSOR_PERF_MAX_PCT,
+        // bottom-ranked → -SPONSOR_PERF_MAX_PCT, linearly interpolated.
+        // Applied multiplicatively on top of the existing ±10% noise.
+        val perfModByTeam = readWccPerformanceModifiers(conn, newSeasonYear - 1)
+
         // Per-deal RNG so renewals are stable across replays: same deal id +
         // same renewal year = same noise. Reuses the deterministic-seeding
         // pattern from retirement rolls.
@@ -733,7 +740,9 @@ class OffSeasonService(private val db: Database) {
                 SPONSOR_RENEW_SALT xor d.id xor newSeasonYear.toLong()
             )
             val noise = 0.9 + rng.nextDouble() * 0.2  // [0.9, 1.1)
-            val newValue = (d.oldValue * noise).toLong().coerceAtLeast(MIN_RENEWAL_VALUE)
+            val perfMod = perfModByTeam[d.teamId] ?: 0.0
+            val scale = (1.0 + perfMod) * noise
+            val newValue = (d.oldValue * scale).toLong().coerceAtLeast(MIN_RENEWAL_VALUE)
             val newEnd = newSeasonYear + SPONSOR_RENEWAL_TERM_YEARS - 1
             Triple(d, newValue, newEnd)
         }
@@ -762,15 +771,92 @@ class OffSeasonService(private val db: Database) {
         logEvents(
             conn, newSeasonYear,
             renewals.map { (d, newValue, newEnd) ->
+                val perfMod = perfModByTeam[d.teamId] ?: 0.0
+                val perfTag = when {
+                    perfMod > 0.0 -> " [+${(perfMod * 100).toInt()}% WCC perf]"
+                    perfMod < 0.0 -> " [${(perfMod * 100).toInt()}% WCC perf]"
+                    else -> ""
+                }
                 EventToLog(
                     "SPONSOR_REVENUE", "TEAM", d.teamId, d.teamName,
                     "${d.teamName}: ${d.sponsorName} renewed " +
-                        "($${d.oldValue} → $${newValue}/yr) through $newEnd",
+                        "($${d.oldValue} → $${newValue}/yr) through $newEnd$perfTag",
                 )
             },
         )
 
         return renewals.size
+    }
+
+    /**
+     * Build a per-team WCC performance modifier map for the given season.
+     * Returns `Map<teamId, modifier>` where modifier is in
+     * `[-SPONSOR_PERF_MAX_PCT, +SPONSOR_PERF_MAX_PCT]`, top-ranked positive,
+     * bottom-ranked negative, linear interpolation in between.
+     *
+     * Aggregates points from both `race_results.points` and
+     * `sprint_results.sprint_points` for the given `season_year`. Teams
+     * with zero entries get rank = last (and thus the maximum penalty);
+     * teams not in the F1 series are excluded entirely so they don't skew
+     * the rank distribution.
+     *
+     * Single-team edge case: with only one F1 team there's no rank gradient,
+     * so the modifier is 0.0.
+     */
+    private fun readWccPerformanceModifiers(
+        conn: Connection,
+        seasonYear: Int,
+    ): Map<String, Double> {
+        data class TeamPoints(val teamId: String, val points: Double)
+
+        val teamPoints = conn.prepareStatement(
+            """
+            SELECT t.id AS team_id,
+                   COALESCE(rr.pts, 0) + COALESCE(sr.pts, 0) AS wcc_points
+              FROM teams t
+              LEFT JOIN (
+                  SELECT rr.team_id, SUM(rr.points)::double precision AS pts
+                    FROM race_results rr
+                    JOIN races r ON r.id = rr.race_id
+                   WHERE r.season_year = ?
+                   GROUP BY rr.team_id
+              ) rr ON rr.team_id = t.id
+              LEFT JOIN (
+                  SELECT sr.team_id, SUM(sr.sprint_points)::double precision AS pts
+                    FROM sprint_results sr
+                    JOIN races r ON r.id = sr.race_id
+                   WHERE r.season_year = ?
+                   GROUP BY sr.team_id
+              ) sr ON sr.team_id = t.id
+             WHERE t.series = 'F1'
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.setInt(1, seasonYear)
+            stmt.setInt(2, seasonYear)
+            stmt.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(TeamPoints(rs.getString("team_id"), rs.getDouble("wcc_points")))
+                    }
+                }
+            }
+        }
+
+        if (teamPoints.size <= 1) return emptyMap()
+
+        // Sort high → low, then map index to modifier:
+        //   idx 0          → +SPONSOR_PERF_MAX_PCT
+        //   idx (N-1)      → -SPONSOR_PERF_MAX_PCT
+        // Ties get whatever order Postgres/the JVM gave us — fine, since
+        // ties are vanishingly rare across a full season and the modifier
+        // difference between adjacent ranks is small anyway.
+        val ranked = teamPoints.sortedByDescending { it.points }
+        val lastIndex = (ranked.size - 1).toDouble()
+        return ranked.withIndex().associate { (idx, tp) ->
+            val t = idx.toDouble() / lastIndex          // 0.0 .. 1.0
+            val mod = SPONSOR_PERF_MAX_PCT - 2.0 * SPONSOR_PERF_MAX_PCT * t
+            tp.teamId to mod
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1016,5 +1102,13 @@ class OffSeasonService(private val db: Database) {
 
         const val SPONSOR_RENEWAL_TERM_YEARS = 2
         const val MIN_RENEWAL_VALUE = 500_000L
+
+        /**
+         * Half-width of the sponsor renewal performance modifier band.
+         * 0.15 → top WCC team renews at +15% of base, bottom-of-grid at
+         * -15%, linearly interpolated. Stacks multiplicatively with the
+         * existing ±10% noise: best case ~+26%, worst case ~-23%.
+         */
+        const val SPONSOR_PERF_MAX_PCT = 0.15
     }
 }

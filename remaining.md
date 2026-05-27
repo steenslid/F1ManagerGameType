@@ -336,10 +336,11 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   still aren't consulted. Tuning levers: `COUNTER_BID_BONUS` size, and
   whether the second-closest rival should also get a (smaller) bump.
 - **No affordability check in the market.** AI teams sign drivers
-  without consulting `cash_reserves`. Player offers are bounded by SQL
-  CHECK ($100k–$200M) but otherwise unchecked — player can sign Erik
-  Hansson for $200M and the game accepts it. Cost shows up in next
-  season's operating cost tick.
+  without consulting `cash_reserves`. Player offers are bounded by
+  `MIN_OFFER_SALARY = 500k` (aligned with `MIN_RENEWAL_VALUE`) and
+  `MAX_OFFER_SALARY = 200M` but otherwise unchecked — player can sign
+  Erik Hansson for $200M and the game accepts it. Cost shows up in
+  next season's operating cost tick.
 - **Loyalty effect applies on both sides, weighted by `trait_loyalty`.**
   Driver side: `LOYALTY_BONUS = 8.0 × trait_loyalty` when scoring their
   previous team. Team side: `TEAM_LOYALTY_BONUS = 10.0 × trait_loyalty`
@@ -362,7 +363,7 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   `MARKET_SALT xor agent.id.leastSignificantBits xor team.id.hashCode() xor round`
   for replay parity, and uses its own RNG rather than drawing from the
   outer market RNG to avoid shifting state on subsequent matching
-  draws. Player offers go through `MIN_OFFER_SALARY = 100k` only — the
+  draws. Player offers go through `MIN_OFFER_SALARY = 500k` only — the
   player can still try to lowball a star or massively overpay a
   veteran. Could surface the trait + age factors as a scout-report
   hint, since those signals are otherwise invisible to the player.
@@ -381,12 +382,18 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   pausing mid-market and starting a new save can leave orphan offers
   if anything goes wrong; the initialize step wipes on entry, so
   recovery is automatic.
-- **Sponsor renewal is a flat stub.** Lapsed deals auto-renew at
-  `oldValue * (0.9..1.1)` for `SPONSOR_RENEWAL_TERM_YEARS = 2` years
-  via `OffSeasonService.renewSponsors` (step 4b, PRE_SEASON). No
-  defection on poor performance, no new sponsor entrants joining the
-  pool, no negotiation surface for the player. Multi-year saves no
-  longer hit the money cliff but the income line is roughly flat.
+- **Sponsor renewal scales by performance but not by player choice.**
+  Lapsed deals auto-renew at `oldValue * (1 + perfMod) * (0.9..1.1)`
+  for `SPONSOR_RENEWAL_TERM_YEARS = 2` years via
+  `OffSeasonService.renewSponsors` (step 4b, PRE_SEASON), where
+  `perfMod` is `[-0.15, +0.15]` based on last-season WCC rank (top team
+  +15%, bottom team -15%, linear interpolation; from
+  `readWccPerformanceModifiers`). Stacks multiplicatively with the
+  existing ±10% noise → best case ~+26%, worst case ~-23% per renewal.
+  Still no defection on poor performance, no new sponsor entrants
+  joining the pool, no negotiation surface for the player. Could
+  threshold instead of interpolating (e.g. last-place sponsor walks
+  away entirely) for more dramatic outcomes.
 - **`current_year_expenses` lacks R&D and engine costs.** Once R&D
   lands, expense math needs an additional term. Currently:
   `base_operating_cost + academy_investment + driver_salaries +
