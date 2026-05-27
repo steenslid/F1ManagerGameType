@@ -347,12 +347,16 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   still wins. Loyalty doesn't yet interact with team-side scoring (a
   team isn't biased toward re-signing its own drivers) or with the
   driver's `trait_loyalty` hidden stat.
-- **`trait_market_value_modifier` only affects AI salary offers.**
-  `DriverMarketService.computeAiSalary` now multiplies by the trait —
-  generational talents (~1.30) cost premium teams more; journeymen
-  (~0.90) sign for less. Player offers don't validate against this
-  (the player can still try to lowball a star). Could be surfaced as a
-  scout-report hint, since otherwise the trait is invisible.
+- **AI salary offers are scaled by talent and age, but player offers
+  aren't validated against either.** `DriverMarketService.computeAiSalary`
+  multiplies the base bracket by three factors: team prestige
+  (`prestige / 75.0`), `trait_market_value_modifier`
+  (generational ~1.30, journeyman ~0.90), and an age decay
+  (`1 - 0.05 * years_past_trait_peak_age`, floored at 0.50). Player
+  offers go through `MIN_OFFER_SALARY = 100k` only — the player can
+  still try to lowball a star or massively overpay a veteran. Could
+  surface the trait + age factor as a scout-report hint, since those
+  signals are otherwise invisible to the player.
 - **Personnel contracts expire but there's no personnel market.**
   Personnel released by expiration stay unsigned indefinitely. Race
   effects don't depend on personnel yet (just pit crew rating, which is

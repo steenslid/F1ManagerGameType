@@ -474,6 +474,7 @@ class DriverMarketService(private val db: Database) {
         val name: String,
         val statPace: Int,
         val currentAge: Int,
+        val peakAge: Int,
         val morale: Int,
         val previousTeamId: String?,
         val marketValueModifier: Double,
@@ -505,7 +506,7 @@ class DriverMarketService(private val db: Database) {
     private fun readFreeAgentsForMatching(conn: Connection): List<MarketAgent> {
         return conn.prepareStatement(
             """
-            SELECT id, name, stat_pace, current_age, morale,
+            SELECT id, name, stat_pace, current_age, trait_peak_age, morale,
                    previous_team_id, trait_market_value_modifier
               FROM drivers
              WHERE NOT retired
@@ -523,6 +524,7 @@ class DriverMarketService(private val db: Database) {
                                 name = rs.getString("name"),
                                 statPace = rs.getInt("stat_pace"),
                                 currentAge = rs.getInt("current_age"),
+                                peakAge = rs.getInt("trait_peak_age"),
                                 morale = rs.getInt("morale"),
                                 previousTeamId = rs.getString("previous_team_id"),
                                 marketValueModifier = rs.getDouble("trait_market_value_modifier"),
@@ -702,7 +704,15 @@ class DriverMarketService(private val db: Database) {
         // Per-driver "market value" multiplier. Generational talents
         // (~1.30) command a premium; journeymen (~0.90) sign for less.
         // From driver seed `trait_market_value_modifier`.
-        return (base * prestigeFactor * agent.marketValueModifier).toLong()
+        val valueModifier = agent.marketValueModifier
+        // Age decay: drivers past their peak get progressively cheaper.
+        // 5% off per year past peak, floored at 50% of base. A 41-year-old
+        // veteran whose stat_pace is still 88 (because pace decay rolls
+        // slowly) doesn't command the same salary as an in-peak 28-year-old
+        // at the same pace.
+        val yearsPastPeak = (agent.currentAge - agent.peakAge).coerceAtLeast(0)
+        val ageFactor = (1.0 - yearsPastPeak * AGE_DECAY_PER_YEAR).coerceAtLeast(MIN_AGE_FACTOR)
+        return (base * prestigeFactor * valueModifier * ageFactor).toLong()
     }
 
     /**
@@ -909,5 +919,21 @@ class DriverMarketService(private val db: Database) {
          * enough that a meaningfully more prestigious rival still wins.
          */
         const val LOYALTY_BONUS = 8.0
+
+        /**
+         * AI salary decay per year past `trait_peak_age`. Applied in
+         * `computeAiSalary` as a multiplicative factor. 5% per year matches
+         * the feel of veteran-discount contracts without nuking the salary
+         * of a still-quick 35-year-old.
+         */
+        const val AGE_DECAY_PER_YEAR = 0.05
+
+        /**
+         * Floor on the age-decay factor — even a 50-year-old whose pace is
+         * somehow still high enough to be in the market won't sign for less
+         * than half their base bracket. Past 10 years over peak the slope
+         * flattens here.
+         */
+        const val MIN_AGE_FACTOR = 0.50
     }
 }
