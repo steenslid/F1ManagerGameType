@@ -50,6 +50,7 @@ class DriverMarketService(private val db: Database) {
         val complete: Boolean = false,
         val playerTeamId: String? = null,
         val playerTeamOpenSeats: Int? = null,
+        val playerTeamCashReserves: Long? = null,
     )
 
     @Serializable
@@ -849,6 +850,7 @@ class DriverMarketService(private val db: Database) {
         val openSeats = if (playerTeamId != null) {
             countOpenSeats(conn, playerTeamId)
         } else null
+        val cash = if (playerTeamId != null) readTeamCashReserves(conn, playerTeamId) else null
         return MarketStateDto(
             active = true,
             seasonYear = row.seasonYear,
@@ -857,7 +859,15 @@ class DriverMarketService(private val db: Database) {
             complete = row.currentRound >= row.totalRounds,
             playerTeamId = playerTeamId,
             playerTeamOpenSeats = openSeats,
+            playerTeamCashReserves = cash,
         )
+    }
+
+    private fun readTeamCashReserves(conn: Connection, teamId: String): Long {
+        return conn.prepareStatement("SELECT cash_reserves FROM teams WHERE id = ?").use { stmt ->
+            stmt.setString(1, teamId)
+            stmt.executeQuery().use { rs -> if (rs.next()) rs.getLong("cash_reserves") else 0L }
+        }
     }
 
     private fun readPlayerTeamId(conn: Connection): String? {

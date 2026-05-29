@@ -60,10 +60,14 @@ the user's repo should now contain all of them:
    × age decay (neutral prestige, no noise) instead of a flat pace band, so
    player offers are realistically guided. `DriverMarketService.
    readFreeAgentsForView` only; no schema change.
+13. `market-budget` — driver-market state (`MarketStateDto`) now carries
+   `playerTeamCashReserves` so the player can see their budget while
+   submitting offers (pairs with the salary hint). `DriverMarketService.
+   readState` only; no schema change.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
-recreate is needed — patches 2–12 are all code-only. Schema-per-save means no
+recreate is needed — patches 2–13 are all code-only. Schema-per-save means no
 migrations: a schema edit requires drop + recreate of test saves.
 
 **Files touched this chain** (latest version of each lives in the repo after
