@@ -11,10 +11,22 @@ import MarketPanel from './panels/MarketPanel.vue'
 import TeamsPanel from './panels/TeamsPanel.vue'
 import SchedulePanel from './panels/SchedulePanel.vue'
 import DriversPanel from './panels/DriversPanel.vue'
+import EventFeed from './panels/EventFeed.vue'
 
 const emit = defineEmits(['open-test-ui'])
 
-const { state, myTeam, hasTeam, advanceLabel, refreshAll, advance } = useGame()
+const {
+  state, myTeam, hasTeam, advanceLabel, refreshAll, advance,
+  simToNextRace, simToOffSeason,
+} = useGame()
+
+const simOpen = ref(false)
+
+async function runSim(which) {
+  simOpen.value = false
+  if (which === 'race') await simToNextRace()
+  else if (which === 'offseason') await simToOffSeason()
+}
 
 const appState = ref('saves') // 'saves' | 'select-team' | 'game'
 const activePanel = ref('Dashboard')
@@ -90,7 +102,23 @@ function handleTeamSelected() {
 
         <div class="advance">
           <span v-if="state.error" class="err">{{ state.error }}</span>
-          <button class="btn" :disabled="state.advancing" @click="advance">
+
+          <div class="sim-wrap">
+            <button
+              class="btn ghost"
+              :disabled="state.advancing || state.simming"
+              @click="simOpen = !simOpen"
+            >{{ state.simming ? 'Simulating…' : 'Sim ▾' }}</button>
+            <template v-if="simOpen">
+              <div class="sim-backdrop" @click="simOpen = false"></div>
+              <div class="sim-menu">
+                <button @click="runSim('race')">Sim to next race</button>
+                <button @click="runSim('offseason')">Sim to off-season</button>
+              </div>
+            </template>
+          </div>
+
+          <button class="btn" :disabled="state.advancing || state.simming" @click="advance">
             {{ state.advancing ? 'Advancing…' : advanceLabel }}
           </button>
         </div>
@@ -108,6 +136,8 @@ function handleTeamSelected() {
           <p class="faint">This system isn't built yet — coming soon.</p>
         </div>
       </main>
+
+      <EventFeed />
     </div>
   </div>
 </template>
@@ -164,6 +194,20 @@ function handleTeamSelected() {
 }
 .btn:hover:not(:disabled) { filter: brightness(1.1); }
 .btn:disabled { opacity: .6; cursor: not-allowed; }
+.btn.ghost { background: var(--surface-2); color: var(--fg); border: 1px solid var(--line); }
+.btn.ghost:hover:not(:disabled) { filter: none; border-color: var(--muted); }
+.sim-wrap { position: relative; }
+.sim-backdrop { position: fixed; inset: 0; z-index: 19; }
+.sim-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; min-width: 180px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.5); overflow: hidden; padding: 4px;
+}
+.sim-menu button {
+  display: block; width: 100%; text-align: left; background: transparent; border: none;
+  color: var(--fg); padding: 9px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;
+}
+.sim-menu button:hover { background: var(--surface-2); }
 
 .placeholder { text-align: center; padding: 48px; }
 .placeholder h2 { margin: 0 0 8px; }
