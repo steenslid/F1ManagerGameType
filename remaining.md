@@ -42,10 +42,16 @@ the user's repo should now contain all of them:
    × the sponsor's `performance_sensitivity`. `OffSeasonService.renewSponsors`
    only; no schema change; reuses `SPONSOR_RENEW_SALT` (noise drawn first so
    non-defecting renewals are byte-for-byte unchanged from patch 7).
+10. `ai-affordability` — AI signings gated by `teams.cash_reserves`: a team
+   won't let total racing-driver salaries (existing roster + this market's
+   signings + the new salary) exceed `AI_SALARY_CASH_FRACTION` (0.60) of
+   reserves, so a cash-poor team can be priced out (and leave its own seats
+   empty). `DriverMarketService` only; no schema change; player offers stay
+   ungated.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
-recreate is needed — patches 2–9 are all code-only. Schema-per-save means no
+recreate is needed — patches 2–10 are all code-only. Schema-per-save means no
 migrations: a schema edit requires drop + recreate of test saves.
 
 **Files touched this chain** (latest version of each lives in the repo after
@@ -59,8 +65,6 @@ applying all zips):
 
 **Good next chunks** (small, backend-only unless noted; see "Known issues"
 and "Left to build" for full context):
-- **AI affordability check** — gate AI signings on `teams.cash_reserves` in
-  `DriverMarketService`; AI currently signs regardless of money.
 - **AI personality in market** — `ai_aggression` / `ai_ambition` /
   `ai_frugality` exist on teams but market scoring ignores them.
 - **Frontend (needs the Vue files, not in recent zips)** — surface
@@ -402,15 +406,21 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   team, AI doesn't react to the player at all — and frugality / ambition
   still aren't consulted. Tuning levers: `COUNTER_BID_BONUS` size, and
   whether the second-closest rival should also get a (smaller) bump.
-- **No affordability check in the market.** AI teams sign drivers
-  without consulting `cash_reserves`. Player offers are bounded by
-  `MIN_OFFER_SALARY = 500k` (aligned with `MIN_RENEWAL_VALUE`) and
-  `MAX_OFFER_SALARY = 75M` but otherwise unchecked — player can sign
-  Erik Hansson for $75M and the game accepts it. Cost shows up in
-  next season's operating cost tick. AI offers in practice top out
-  around $33M (max base × max prestige × max trait_market_value_modifier),
-  so 75M gives the player ~2x headroom for impulse buys without
-  permitting the old $200M troll signing.
+- **AI signings are gated by cash; player offers aren't.** AI teams now
+  consult `cash_reserves`: a team won't let total racing-driver salaries
+  (existing roster + this market's signings + the new salary) exceed
+  `AI_SALARY_CASH_FRACTION = 0.60` of reserves, so a cash-poor team can be
+  priced out and may leave its own AI seats empty. Player offers remain
+  bounded only by `MIN_OFFER_SALARY = 500k` (aligned with `MIN_RENEWAL_VALUE`)
+  and `MAX_OFFER_SALARY = 75M` — the player can still sign Erik Hansson for
+  $75M and the cost just shows up in next season's operating cost tick. AI
+  offers in practice top out around $33M, so 75M gives the player ~2x headroom
+  for impulse buys without permitting the old $200M troll signing. The
+  affordability filter scores/quotes all free agents (computeAiSalary has its
+  own RNG) so it only perturbs the deterministic market outcome when it
+  actually bites; when no AI team is cash-constrained, results match patch 8
+  (the last market change). The 0.60 fraction is a tuning knob — could
+  later flex with `ai_frugality` / `ai_ambition`.
 - **Loyalty effect applies on both sides, weighted by `trait_loyalty`.**
   Driver side: `LOYALTY_BONUS = 8.0 × trait_loyalty` when scoring their
   previous team. Team side: `TEAM_LOYALTY_BONUS = 10.0 × trait_loyalty`

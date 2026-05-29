@@ -21,7 +21,9 @@ import kotlin.random.Random
  *   3. Per-round matching: player offers are processed first (the player's
  *      team competes alongside AI teams via the driver's preference list),
  *      then AI fills its own remaining seats. The player team's seats can
- *      only be filled by player offers — silence = empty seats.
+ *      only be filled by player offers — silence = empty seats. AI signings
+ *      are additionally gated by team cash reserves (see [canAfford]); a
+ *      cash-poor AI team can be priced out and leave its own seats empty.
  *
  * Deterministic: each round seeds its own RNG from
  * `Random(masterSeed XOR MARKET_SALT XOR endingSeasonYear XOR round)`.
@@ -387,21 +389,32 @@ class DriverMarketService(private val db: Database) {
         val topK = topKForRound(round, marketTeams.size)
         for (team in aiTeams) {
             while (team.openSeats > 0 && freeAgents.isNotEmpty()) {
-                val candidate = freeAgents
-                    .map { agent ->
-                        val counter = team.id == closestRivalTeamId &&
-                            agent.id in playerOfferedDriverIds &&
-                            // Don't counter if the player has already won this
-                            // candidate (the signing loop above removed them).
-                            // freeAgents is the post-Phase-1 pool so this is
-                            // automatic — but be explicit for clarity.
-                            true
-                        agent to teamScore(team, agent, rng, counter)
-                    }
+                // Score every free agent (preserving the round RNG draw
+                // sequence) and pre-compute the salary each would command.
+                // computeAiSalary uses its own per-(agent, team, round) RNG,
+                // so calling it here doesn't perturb the outer market RNG.
+                val scored = freeAgents.map { agent ->
+                    val counter = team.id == closestRivalTeamId &&
+                        agent.id in playerOfferedDriverIds
+                    Scored(
+                        agent = agent,
+                        teamScore = teamScore(team, agent, rng, counter),
+                        salary = computeAiSalary(agent, team, round),
+                    )
+                }
+
+                // Affordability gate: the team's projected racing-driver
+                // salary bill (existing roster + already-committed this market
+                // + this new salary) must stay within AI_SALARY_CASH_FRACTION
+                // of its cash reserves. Filter to what the team can actually
+                // pay, then pick the best by preference. If nothing's
+                // affordable the team is tapped out and stops signing.
+                val candidate = scored
+                    .filter { team.canAfford(it.salary) }
                     .maxWithOrNull(
-                        compareBy<Pair<MarketAgent, Double>> { it.second }
-                            .thenBy { it.first.name }
-                    )?.first ?: break
+                        compareBy<Scored> { it.teamScore }
+                            .thenBy { it.agent.name }
+                    )?.agent ?: break
 
                 val driversRanking = marketTeams
                     .filter { it.openSeats > 0 && it.id != playerTeamId }
@@ -416,16 +429,18 @@ class DriverMarketService(private val db: Database) {
                 if (mutualOk) {
                     val isCounter = team.id == closestRivalTeamId &&
                         candidate.id in playerOfferedDriverIds
+                    val salary = computeAiSalary(candidate, team, round)
                     signings += MarketSigning(
                         agent = candidate,
                         team = team,
-                        salary = computeAiSalary(candidate, team, round),
+                        salary = salary,
                         expiresYear = endingSeasonYear + DEFAULT_CONTRACT_YEARS,
                         playerOffer = false,
                         counterBid = isCounter,
                     )
                     freeAgents.remove(candidate)
                     team.openSeats -= 1
+                    team.committedSalary += salary
                 } else {
                     break
                 }
@@ -486,7 +501,10 @@ class DriverMarketService(private val db: Database) {
         val name: String,
         val prestige: Int,
         val seasonPoints: Int,
+        val cashReserves: Long,
+        val existingDriverSalary: Long,
         var openSeats: Int,
+        var committedSalary: Long = 0,
     )
 
     private data class MarketSigning(
@@ -502,6 +520,13 @@ class DriverMarketService(private val db: Database) {
         val driverId: UUID,
         val salary: Long,
         val contractYears: Int,
+    )
+
+    /** A scored, salary-quoted candidate within one AI team's signing loop. */
+    private data class Scored(
+        val agent: MarketAgent,
+        val teamScore: Double,
+        val salary: Long,
     )
 
     private fun readFreeAgentsForMatching(conn: Connection): List<MarketAgent> {
@@ -541,11 +566,14 @@ class DriverMarketService(private val db: Database) {
     private fun readMatchingTeams(conn: Connection): List<MarketTeam> {
         return conn.prepareStatement(
             """
-            SELECT t.id, t.name, t.prestige, t.season_points,
-                   GREATEST(0, $SEATS_PER_TEAM - COALESCE(driver_count.cnt, 0)) AS open_seats
+            SELECT t.id, t.name, t.prestige, t.season_points, t.cash_reserves,
+                   GREATEST(0, $SEATS_PER_TEAM - COALESCE(driver_count.cnt, 0)) AS open_seats,
+                   COALESCE(driver_count.sal, 0) AS existing_driver_salary
               FROM teams t
               LEFT JOIN (
-                  SELECT current_racing_team_id, COUNT(*) AS cnt
+                  SELECT current_racing_team_id,
+                         COUNT(*) AS cnt,
+                         COALESCE(SUM(current_salary), 0) AS sal
                     FROM drivers
                    WHERE NOT retired
                      AND current_racing_team_id IS NOT NULL
@@ -564,6 +592,8 @@ class DriverMarketService(private val db: Database) {
                                 name = rs.getString("name"),
                                 prestige = rs.getInt("prestige"),
                                 seasonPoints = rs.getInt("season_points"),
+                                cashReserves = rs.getLong("cash_reserves"),
+                                existingDriverSalary = rs.getLong("existing_driver_salary"),
                                 openSeats = rs.getInt("open_seats"),
                             )
                         )
@@ -702,6 +732,20 @@ class DriverMarketService(private val db: Database) {
         } else 0.0
         val noise = rng.nextDouble() * 5.0
         return prestige * 0.6 + performance * 0.3 + loyalty + noise
+    }
+
+    /**
+     * Affordability gate for AI signings. A team's projected racing-driver
+     * salary bill — existing roster + salaries already committed this market
+     * + the prospective new salary — must not exceed [AI_SALARY_CASH_FRACTION]
+     * of its current cash reserves. A team in the red (negative reserves)
+     * can't sign anyone, which can legitimately leave AI seats empty. Player
+     * offers are NOT gated here (the player can still overspend within
+     * MIN/MAX_OFFER_SALARY) — by design, the player owns their own budget rope.
+     */
+    private fun MarketTeam.canAfford(salary: Long): Boolean {
+        val ceiling = (cashReserves * AI_SALARY_CASH_FRACTION).toLong()
+        return existingDriverSalary + committedSalary + salary <= ceiling
     }
 
     private fun computeAiSalary(agent: MarketAgent, team: MarketTeam, round: Int): Long {
@@ -976,5 +1020,17 @@ class DriverMarketService(private val db: Database) {
          * prestige rival teams quote noticeably different numbers.
          */
         const val SALARY_NOISE_PCT = 0.05
+
+        /**
+         * Cap on the fraction of an AI team's cash reserves that can be tied
+         * up in total racing-driver salaries (existing roster + newly signed).
+         * Gates AI signings so a cash-poor team can't keep buying drivers it
+         * can't pay for. 0.60 leaves headroom for operating costs, personnel,
+         * and R&D-to-come. With seeded year-1 cash (~$100M–200M) this rarely
+         * bites, but it starts mattering once multi-year deficits (e.g. a
+         * back-marker bleeding sponsors) erode reserves. Player offers are
+         * exempt. Tuning knob.
+         */
+        const val AI_SALARY_CASH_FRACTION = 0.60
     }
 }
