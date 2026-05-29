@@ -144,7 +144,13 @@ async function withdraw(offer) {
                   <button v-else class="btn-small" @click="startOffer(d)">Offer</button>
                 </td>
               </tr>
-              <tr v-if="!freeAgents.length"><td colspan="5" class="faint text-center p-20">No free agents available.</td></tr>
+              <tr v-if="!freeAgents.length">
+                <td colspan="5" class="empty-cell">
+                  <div class="empty-title">No free agents yet</div>
+                  <p class="faint">Every driver is still under contract. Drivers enter the market when their
+                    deals expire at season's end — play through a full season and they'll appear here next off-season.</p>
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -262,6 +268,9 @@ async function withdraw(offer) {
 .pill { background: var(--surface-2); color: var(--muted); padding: 3px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; }
 .pill.title { background: var(--accent-soft); color: #ff7066; }
 .p-20 { padding: 20px; }
+.empty-cell { text-align: center; padding: 28px 20px; }
+.empty-cell .empty-title { font-weight: 700; font-size: 14px; margin-bottom: 6px; }
+.empty-cell p { max-width: 380px; margin: 0 auto; font-size: 12px; line-height: 1.5; }
 .faint { color: var(--faint); }
 .muted { color: var(--muted); }
 </style>

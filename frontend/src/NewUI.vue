@@ -4,6 +4,7 @@ import { useGame } from './useGame.js'
 import { fmtMoney, phaseLabel, crestText } from './format.js'
 
 import SavesPanel from './panels/SavesPanel.vue'
+import TeamSelectPanel from './panels/TeamSelectPanel.vue'
 import DashboardPanel from './panels/DashboardPanel.vue'
 import RaceWeekendPanel from './panels/RaceWeekendPanel.vue'
 import MarketPanel from './panels/MarketPanel.vue'
@@ -15,7 +16,7 @@ const emit = defineEmits(['open-test-ui'])
 
 const { state, myTeam, hasTeam, advanceLabel, refreshAll, advance } = useGame()
 
-const appState = ref('saves') // 'saves' | 'game'
+const appState = ref('saves') // 'saves' | 'select-team' | 'game'
 const activePanel = ref('Dashboard')
 
 // Real screens first, then "coming soon" stubs for systems not built yet.
@@ -27,6 +28,12 @@ const stubItems = ['Staff', 'Academy', 'History']
 async function handleSaveLoaded() {
   await refreshAll()
   activePanel.value = 'Dashboard'
+  // A fresh save has no player team yet — route into the picker first.
+  appState.value = hasTeam.value ? 'game' : 'select-team'
+}
+
+function handleTeamSelected() {
+  activePanel.value = 'Dashboard'
   appState.value = 'game'
 }
 </script>
@@ -34,6 +41,8 @@ async function handleSaveLoaded() {
 <template>
   <div class="new-ui-wrapper">
     <SavesPanel v-if="appState === 'saves'" @save-loaded="handleSaveLoaded" />
+
+    <TeamSelectPanel v-else-if="appState === 'select-team'" @team-selected="handleTeamSelected" />
 
     <div v-else>
       <!-- Top nav -->

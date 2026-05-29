@@ -20,10 +20,11 @@ const mode = ref('new')
 
 <style>
 .dev-toggle {
-  position: fixed; bottom: 20px; right: 20px; z-index: 9999;
-  background: #ff00ff; color: white; border: none; padding: 10px 15px;
-  border-radius: 8px; font-weight: bold; cursor: pointer;
+  position: fixed; bottom: 12px; right: 12px; z-index: 9999;
+  background: #ff00ff; color: white; border: none; padding: 6px 10px;
+  border-radius: 7px; font-weight: bold; font-size: 11px; cursor: pointer;
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+  opacity: 0.45; transition: opacity 0.15s;
 }
-.dev-toggle:hover { background: #d000d0; }
+.dev-toggle:hover { background: #d000d0; opacity: 1; }
 </style>

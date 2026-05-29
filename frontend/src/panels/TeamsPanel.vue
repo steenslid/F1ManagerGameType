@@ -4,7 +4,7 @@ import { api } from '../api.js'
 import { useGame } from '../useGame.js'
 import { fmtMoney, crestText } from '../format.js'
 
-const { state, takeControl } = useGame()
+const { state } = useGame()
 
 const teams = ref([])
 const isLoading = ref(true)
@@ -23,10 +23,6 @@ async function load() {
   } finally {
     isLoading.value = false
   }
-}
-
-async function control(team) {
-  await takeControl(team.id)
 }
 
 function isMine(team) {
@@ -56,10 +52,7 @@ function isMine(team) {
           <td class="r num">{{ team.prestige }}</td>
           <td class="r num">{{ team.seasonPoints }}</td>
           <td class="r num">{{ fmtMoney(team.finance?.cashReserves) }}</td>
-          <td class="r">
-            <span v-if="isMine(team)" class="pill mine">Your team</span>
-            <button v-else class="btn-small" @click="control(team)">Take control</button>
-          </td>
+          <td class="r"><span v-if="isMine(team)" class="pill mine">Your team</span></td>
         </tr>
       </tbody>
     </table>
@@ -79,8 +72,6 @@ function isMine(team) {
 tr.me td { background: var(--accent-soft); }
 .pill { background: var(--surface-2); color: var(--muted); padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 700; }
 .pill.mine { background: var(--accent-soft); color: #ff7066; border: 1px solid #e1060055; }
-.btn-small { background: var(--accent); border: none; color: #fff; padding: 7px 12px; border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 12px; }
-.btn-small:hover { filter: brightness(1.1); }
 .p-20 { padding: 20px; text-align: center; }
 .faint { color: var(--faint); }
 </style>
