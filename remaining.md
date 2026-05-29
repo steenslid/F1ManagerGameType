@@ -6,6 +6,71 @@ Status snapshot for a single-player F1 team management game. Kotlin backend
 
 Design doc: `information.md`.
 
+## Session handoff (read this first)
+
+This file is the running status doc. The sections below ("Built so far",
+"Left to build", "Known issues", "File map", "Gotchas") are the durable
+reference. This block is the live handoff so a fresh instance can resume
+without re-reading the whole chat.
+
+**Working style.** Small, low-token chunks per turn. Each chunk: one focused
+feature or fix, delivered as a zip with correct `src/main/...` structure,
+plus the updated `remaining.md`. Known-issue fixes get folded into feature
+work where natural. Each patch carries forward only the files it touches and
+states "builds on patch X" explicitly.
+
+**Most recent patch chain (newest last).** All applied on top of each other;
+the user's repo should now contain all of them:
+
+1. `loyalty` — `drivers.previous_team_id` column (SCHEMA CHANGE) + driver-side
+   loyalty bonus in market scoring.
+2. `sponsor-renewal` — `OffSeasonService.renewSponsors` stub (step 4b,
+   PRE_SEASON); `academy_investment` now flows through the operating-cost
+   tick; `trait_market_value_modifier` now read in `computeAiSalary`.
+3. `salary-aging` — age decay on AI salary (`trait_peak_age`).
+4. `loyalty-asymmetry` — team-side loyalty bonus; `trait_loyalty` now read;
+   both loyalty bonuses weighted by it.
+5. `loyalty-reset` — one-cycle reset of `previous_team_id` for drivers who
+   entered the off-season already unsigned.
+6. `ai-salary-noise` — ±5% per-(agent, team, round) noise on AI salary.
+7. `sponsor-perf` — sponsor renewal scaled by last-season WCC rank
+   (`readWccPerformanceModifiers`, ±15%); `MIN_OFFER_SALARY` 100k→500k.
+8. `max-offer` — `MAX_OFFER_SALARY` 200M→75M.
+9. `sponsor-defection` — sponsors of below-mid-grid teams may walk away (no
+   renewal) instead of renewing at a discount. Per-deal defection chance =
+   (shortfall / `SPONSOR_PERF_MAX_PCT`) × `SPONSOR_DEFECTION_MAX_PROB` (0.40)
+   × the sponsor's `performance_sensitivity`. `OffSeasonService.renewSponsors`
+   only; no schema change; reuses `SPONSOR_RENEW_SALT` (noise drawn first so
+   non-defecting renewals are byte-for-byte unchanged from patch 7).
+
+**Schema state.** The only schema change in this chain was `previous_team_id`
+(patch 1). If the user already recreated saves after that, no further
+recreate is needed — patches 2–9 are all code-only. Schema-per-save means no
+migrations: a schema edit requires drop + recreate of test saves.
+
+**Files touched this chain** (latest version of each lives in the repo after
+applying all zips):
+- `src/main/resources/sql/save_schema.sql` — `previous_team_id` + index.
+- `src/main/kotlin/f1sim/game/OffSeasonService.kt` — loyalty set/clear on
+  expiry+retirement, one-cycle reset, sponsor renewal + WCC perf scaling,
+  academy in cost tick.
+- `src/main/kotlin/f1sim/game/DriverMarketService.kt` — loyalty (both sides),
+  trait reads, age decay, salary noise, offer bounds.
+
+**Good next chunks** (small, backend-only unless noted; see "Known issues"
+and "Left to build" for full context):
+- **AI affordability check** — gate AI signings on `teams.cash_reserves` in
+  `DriverMarketService`; AI currently signs regardless of money.
+- **AI personality in market** — `ai_aggression` / `ai_ambition` /
+  `ai_frugality` exist on teams but market scoring ignores them.
+- **Frontend (needs the Vue files, not in recent zips)** — surface
+  `academy_investment` in TeamsPanel; distinguish sponsor renewal vs revenue
+  events in the off-season events panel.
+
+**To resume:** pick a chunk, copy the relevant current file(s) from the repo
+into a fresh work dir, make the edit, update this handoff block + the
+matching "Known issues" entry, zip with `src/main/...` structure, deliver.
+
 ## Built so far
 
 **Framework.** Gradle Kotlin project. `Database.withConnection { }` sets
@@ -135,7 +200,8 @@ first-advance aging on fresh saves).
     `oldValue * (0.9..1.1)` for `SPONSOR_RENEWAL_TERM_YEARS = 2` more
     years. Per-deal RNG keyed on `deal.id XOR year XOR SPONSOR_RENEW_SALT`
     for replay parity. Logged as `SPONSOR_REVENUE` event_type with a
-    "renewed" disambiguator (avoids a CHECK constraint update).
+    "renewed" disambiguator (avoids a CHECK constraint update). Sponsors of
+    below-mid-grid teams may defect (no renewal) instead — see Known issues.
   - **Sponsor revenue tick.** Sum each team's active sponsorships
     (`start_year <= year <= end_year`), set `current_year_income`. One
     event per team with revenue.
@@ -231,8 +297,9 @@ table on sprint weekends.
 
 ### Loose ends — less than a round
 
-- Sponsor performance bonuses / defection (real revenue should vary with
-  results).
+- Sponsor performance bonuses (patch 7) and defection (patch 9) both
+  landed; remaining sponsor work is new entrants joining the pool and a
+  player negotiation surface.
 - New sponsor entrants joining the pool yearly (current renewal stub
   only extends existing deals; the sponsor table stays static).
 - Aging stat drift for stats beyond `stat_pace` / `skill_design` (other
@@ -393,10 +460,14 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   +15%, bottom team -15%, linear interpolation; from
   `readWccPerformanceModifiers`). Stacks multiplicatively with the
   existing ±10% noise → best case ~+26%, worst case ~-23% per renewal.
-  Still no defection on poor performance, no new sponsor entrants
-  joining the pool, no negotiation surface for the player. Could
-  threshold instead of interpolating (e.g. last-place sponsor walks
-  away entirely) for more dramatic outcomes.
+  Sponsors of below-mid-grid teams (negative `perfMod`) can now defect
+  instead of renewing: per-deal chance = (shortfall / `SPONSOR_PERF_MAX_PCT`)
+  × `SPONSOR_DEFECTION_MAX_PROB` (0.40) × the sponsor's
+  `performance_sensitivity`, rolled on the same per-deal RNG (noise drawn
+  first, so non-defecting renewals match patch 7 exactly). A defected deal
+  keeps its old `end_year` and drops out of the just-expired window next
+  year, so it's gone for good and the revenue tick skips it. Still no new
+  sponsor entrants joining the pool, no negotiation surface for the player.
 - **`current_year_expenses` lacks R&D and engine costs.** Once R&D
   lands, expense math needs an additional term. Currently:
   `base_operating_cost + academy_investment + driver_salaries +

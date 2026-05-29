@@ -31,8 +31,10 @@ import kotlin.random.Random
  *        between OFF_SEASON and PRE_SEASON.
  *
  *   PRE_SEASON hooks (the new year about to start):
- *     4b. Sponsor renewals — extend lapsed deals at ~same value so teams
- *         keep their income stream going. Stub for a real sponsor market.
+ *     4b. Sponsor renewals — extend lapsed deals at ~same value (scaled by
+ *         last-season WCC rank) so teams keep their income stream going.
+ *         Sponsors of below-mid-grid teams may defect (walk away, no
+ *         renewal) instead. Stub for a real sponsor market.
  *     6. Sponsor revenue tick — sum active sponsorships, set current_year_income.
  *     7. Operating cost tick — base_operating_cost + academy_investment +
  *        driver salaries + personnel salaries, set current_year_expenses.
@@ -91,7 +93,7 @@ class OffSeasonService(private val db: Database) {
         val costEvents = applyOperatingCostsTick(conn, newSeasonYear)
         val total = renewalEvents + revenueEvents + costEvents
         log.info(
-            "PRE_SEASON {}: {} sponsor renewals, {} sponsor revenue events, {} operating cost events",
+            "PRE_SEASON {}: {} sponsor renewal/defection events, {} sponsor revenue events, {} operating cost events",
             newSeasonYear, renewalEvents, revenueEvents, costEvents,
         )
         return total
@@ -668,14 +670,34 @@ class OffSeasonService(private val db: Database) {
     // ------------------------------------------------------------------
 
     /**
-     * Renewal stub: any deal whose `end_year` is before the new season year
-     * (so it's just expired) gets auto-renewed for [SPONSOR_RENEWAL_TERM_YEARS]
-     * years at the same annual value, plus a small ±10% noise. Real sponsor
-     * markets (re-evaluation, defection on poor performance, new entrants)
-     * are a follow-up; this just keeps the income lights on.
+     * Renewal stub with defection: any deal whose `end_year` is before the
+     * new season year (so it's just expired) is reconsidered.
      *
-     * Determinism is keyed on the deal id so renewals across saves/replays
-     * are stable.
+     * Most lapsed deals auto-renew for [SPONSOR_RENEWAL_TERM_YEARS] years at
+     * the old annual value scaled by `(1 + perfMod) * noise`, where `perfMod`
+     * is the last-season WCC performance modifier (±[SPONSOR_PERF_MAX_PCT])
+     * and `noise` is a small ±10% wobble.
+     *
+     * Sponsors of teams that finished below mid-grid (negative `perfMod`)
+     * may instead **defect** — walk away with no renewal. The per-deal
+     * defection probability scales with how far below mid-grid the team
+     * finished and with the sponsor's own `performance_sensitivity`:
+     *
+     *   defectProb = (shortfall / SPONSOR_PERF_MAX_PCT)
+     *              * SPONSOR_DEFECTION_MAX_PROB
+     *              * sponsor.performance_sensitivity
+     *
+     * where `shortfall = max(0, -perfMod)`. A title sponsor on a dead-last
+     * team that's highly performance-sensitive faces the full risk; a
+     * results-indifferent minor sponsor barely flinches. Defecting deals are
+     * left lapsed (end_year untouched) and skipped by the revenue tick, so
+     * the team loses that income stream.
+     *
+     * Determinism is keyed on the deal id so renewals/defections across
+     * saves/replays are stable. The renewal-noise draw happens first and is
+     * unchanged from the renewal-only version, so a deal that does NOT defect
+     * renews at exactly the same value as before this feature landed; only
+     * the (negative-perfMod) deals that now walk away change behaviour.
      */
     private fun renewSponsors(conn: Connection, newSeasonYear: Int): Int {
         data class Lapsed(
@@ -683,6 +705,7 @@ class OffSeasonService(private val db: Database) {
             val teamId: String,
             val teamName: String,
             val sponsorName: String,
+            val performanceSensitivity: Double,
             val oldEndYear: Int,
             val oldValue: Long,
         )
@@ -691,6 +714,7 @@ class OffSeasonService(private val db: Database) {
             """
             SELECT ts.id, ts.team_id, t.name AS team_name,
                    s.name AS sponsor_name,
+                   s.performance_sensitivity AS performance_sensitivity,
                    ts.end_year, ts.annual_value
               FROM team_sponsorships ts
               JOIN teams t   ON t.id = ts.team_id
@@ -702,7 +726,9 @@ class OffSeasonService(private val db: Database) {
             // The second filter constrains us to "just-expired" deals (ended
             // last season) — older lapsed deals stay lapsed. Keeps the
             // renewal step idempotent across replays even though it's not
-            // RNG-deterministic per-deal beyond the noise seed.
+            // RNG-deterministic per-deal beyond the noise seed. A deal that
+            // defected last off-season keeps its old end_year and so falls
+            // out of this window next year — it won't be reconsidered.
             stmt.setInt(1, newSeasonYear)
             stmt.setInt(2, newSeasonYear - 1)
             stmt.executeQuery().use { rs ->
@@ -714,6 +740,7 @@ class OffSeasonService(private val db: Database) {
                                 teamId = rs.getString("team_id"),
                                 teamName = rs.getString("team_name"),
                                 sponsorName = rs.getString("sponsor_name"),
+                                performanceSensitivity = rs.getDouble("performance_sensitivity"),
                                 oldEndYear = rs.getInt("end_year"),
                                 oldValue = rs.getLong("annual_value"),
                             )
@@ -729,63 +756,103 @@ class OffSeasonService(private val db: Database) {
         // finished high in the WCC last season, at a discount for teams
         // that finished low. Maps top-ranked → +SPONSOR_PERF_MAX_PCT,
         // bottom-ranked → -SPONSOR_PERF_MAX_PCT, linearly interpolated.
-        // Applied multiplicatively on top of the existing ±10% noise.
+        // Applied multiplicatively on top of the existing ±10% noise, and
+        // also drives the defection probability below.
         val perfModByTeam = readWccPerformanceModifiers(conn, newSeasonYear - 1)
 
-        // Per-deal RNG so renewals are stable across replays: same deal id +
-        // same renewal year = same noise. Reuses the deterministic-seeding
-        // pattern from retirement rolls.
-        val renewals = lapsed.map { d ->
+        data class Renewal(val deal: Lapsed, val newValue: Long, val newEnd: Int)
+        data class Defection(val deal: Lapsed, val defectProb: Double)
+
+        val renewals = mutableListOf<Renewal>()
+        val defections = mutableListOf<Defection>()
+
+        // Per-deal RNG so outcomes are stable across replays: same deal id +
+        // same renewal year = same draws. The noise draw is taken FIRST so
+        // non-defecting deals renew at the exact value they did before
+        // defection existed; the defection roll is a second draw from the
+        // same per-deal RNG, taken only for at-risk (negative-perfMod) deals.
+        lapsed.forEach { d ->
             val rng = kotlin.random.Random(
                 SPONSOR_RENEW_SALT xor d.id xor newSeasonYear.toLong()
             )
             val noise = 0.9 + rng.nextDouble() * 0.2  // [0.9, 1.1)
             val perfMod = perfModByTeam[d.teamId] ?: 0.0
-            val scale = (1.0 + perfMod) * noise
-            val newValue = (d.oldValue * scale).toLong().coerceAtLeast(MIN_RENEWAL_VALUE)
-            val newEnd = newSeasonYear + SPONSOR_RENEWAL_TERM_YEARS - 1
-            Triple(d, newValue, newEnd)
+
+            // Defection risk only for below-mid-grid teams (negative perfMod).
+            val shortfall = (-perfMod).coerceAtLeast(0.0)
+            val defectProb = if (shortfall > 0.0) {
+                ((shortfall / SPONSOR_PERF_MAX_PCT) *
+                    SPONSOR_DEFECTION_MAX_PROB *
+                    d.performanceSensitivity)
+                    .coerceIn(0.0, 1.0)
+            } else 0.0
+            val defects = defectProb > 0.0 && rng.nextDouble() < defectProb
+
+            if (defects) {
+                defections += Defection(d, defectProb)
+            } else {
+                val scale = (1.0 + perfMod) * noise
+                val newValue = (d.oldValue * scale).toLong().coerceAtLeast(MIN_RENEWAL_VALUE)
+                val newEnd = newSeasonYear + SPONSOR_RENEWAL_TERM_YEARS - 1
+                renewals += Renewal(d, newValue, newEnd)
+            }
         }
 
-        conn.prepareStatement(
-            """
-            UPDATE team_sponsorships SET
-              start_year = ?,
-              end_year = ?,
-              annual_value = ?
-             WHERE id = ?
-            """.trimIndent()
-        ).use { stmt ->
-            renewals.forEach { (d, newValue, newEnd) ->
-                stmt.setInt(1, newSeasonYear)
-                stmt.setInt(2, newEnd)
-                stmt.setLong(3, newValue)
-                stmt.setLong(4, d.id)
-                stmt.addBatch()
+        if (renewals.isNotEmpty()) {
+            conn.prepareStatement(
+                """
+                UPDATE team_sponsorships SET
+                  start_year = ?,
+                  end_year = ?,
+                  annual_value = ?
+                 WHERE id = ?
+                """.trimIndent()
+            ).use { stmt ->
+                renewals.forEach { r ->
+                    stmt.setInt(1, newSeasonYear)
+                    stmt.setInt(2, r.newEnd)
+                    stmt.setLong(3, r.newValue)
+                    stmt.setLong(4, r.deal.id)
+                    stmt.addBatch()
+                }
+                stmt.executeBatch()
             }
-            stmt.executeBatch()
         }
 
         // Log under SPONSOR_REVENUE — it's the same conceptual bucket and
-        // avoids another CHECK update. The message disambiguates.
-        logEvents(
-            conn, newSeasonYear,
-            renewals.map { (d, newValue, newEnd) ->
-                val perfMod = perfModByTeam[d.teamId] ?: 0.0
-                val perfTag = when {
-                    perfMod > 0.0 -> " [+${(perfMod * 100).toInt()}% WCC perf]"
-                    perfMod < 0.0 -> " [${(perfMod * 100).toInt()}% WCC perf]"
-                    else -> ""
-                }
-                EventToLog(
-                    "SPONSOR_REVENUE", "TEAM", d.teamId, d.teamName,
-                    "${d.teamName}: ${d.sponsorName} renewed " +
-                        "($${d.oldValue} → $${newValue}/yr) through $newEnd$perfTag",
-                )
-            },
-        )
+        // avoids another CHECK update. The message disambiguates renewal
+        // vs defection.
+        val events = mutableListOf<EventToLog>()
+        renewals.forEach { r ->
+            val d = r.deal
+            val perfMod = perfModByTeam[d.teamId] ?: 0.0
+            val perfTag = when {
+                perfMod > 0.0 -> " [+${(perfMod * 100).toInt()}% WCC perf]"
+                perfMod < 0.0 -> " [${(perfMod * 100).toInt()}% WCC perf]"
+                else -> ""
+            }
+            events += EventToLog(
+                "SPONSOR_REVENUE", "TEAM", d.teamId, d.teamName,
+                "${d.teamName}: ${d.sponsorName} renewed " +
+                    "($${d.oldValue} → $${r.newValue}/yr) through ${r.newEnd}$perfTag",
+            )
+        }
+        defections.forEach { def ->
+            val d = def.deal
+            val pct = (def.defectProb * 100).toInt()
+            events += EventToLog(
+                "SPONSOR_REVENUE", "TEAM", d.teamId, d.teamName,
+                "${d.teamName}: ${d.sponsorName} declined to renew and walked away " +
+                    "after a poor WCC season ($${d.oldValue}/yr deal lost; defection chance ${pct}%)",
+            )
+        }
+        logEvents(conn, newSeasonYear, events)
 
-        return renewals.size
+        log.info(
+            "Sponsor renewals for {}: {} renewed, {} defected",
+            newSeasonYear, renewals.size, defections.size,
+        )
+        return renewals.size + defections.size
     }
 
     /**
@@ -1110,5 +1177,18 @@ class OffSeasonService(private val db: Database) {
          * existing ±10% noise: best case ~+26%, worst case ~-23%.
          */
         const val SPONSOR_PERF_MAX_PCT = 0.15
+
+        /**
+         * Maximum per-deal probability that a sponsor walks away instead of
+         * renewing. Reached only when the team finished dead last
+         * (perfMod = -SPONSOR_PERF_MAX_PCT, so shortfall ratio = 1.0) AND the
+         * sponsor is maximally performance-sensitive (1.0). Scales linearly
+         * down to 0 at mid-grid (perfMod >= 0). With the seeded sponsor pool
+         * (performance_sensitivity ~0.30..0.80) a dead-last team faces roughly
+         * a 12–32% walk-away chance per just-expired deal — a real sting for
+         * back-markers without gutting their income every off-season. Tuning
+         * knob; raise for harsher consequences.
+         */
+        const val SPONSOR_DEFECTION_MAX_PROB = 0.40
     }
 }
