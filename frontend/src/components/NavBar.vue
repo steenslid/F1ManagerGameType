@@ -4,11 +4,13 @@ defineProps({
 })
 const emit = defineEmits(['update:activePanel', 'openTestUi'])
 
+// Removed 'Standings' since it's centralized on the Dashboard
 const menuItems = [
   'Dashboard', 'Race Weekend', 'Schedule', 'Drivers',
-  'Finance', 'Market', 'Staff', 'Academy', 'Standings', 'Teams', 'History'
+  'Finance', 'Market', 'Staff', 'Academy', 'Teams', 'History'
 ]
 </script>
+
 
 <template>
   <nav class="nav">

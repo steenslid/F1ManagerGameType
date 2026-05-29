@@ -10,6 +10,7 @@ import MarketPanel from './panels/MarketPanel.vue'
 import TeamsPanel from './panels/TeamsPanel.vue'
 import SchedulePanel from "./panels/SchedulePanel.vue";
 import RaceWeekendPanel from "./panels/RaceWeekendPanel.vue";
+import DriversPanel from "./panels/DriversPanel.vue";
 
 const appState = ref('saves')
 const activePanel = ref('Dashboard')
@@ -41,6 +42,7 @@ const handleAdvance = () => {
         <MarketPanel v-else-if="activePanel === 'Market' || activePanel === 'Finance'" />
         <TeamsPanel v-else-if="activePanel === 'Teams'" />
         <SchedulePanel v-else-if="activePanel === 'Schedule'" />
+        <DriversPanel v-else-if="activePanel === 'Drivers'" />
 
 
       <div v-else class="card" style="text-align: center; padding: 40px;">
