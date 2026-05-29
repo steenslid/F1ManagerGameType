@@ -1,5 +1,7 @@
 import { createApp } from 'vue'
-import TestUi from './testui/TestUI.vue'
 import './style.css'
 
-createApp(TestUi).mount('#app')
+import App from './App.vue'
+
+createApp(App).mount('#app')
+

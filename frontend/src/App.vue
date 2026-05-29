@@ -3,8 +3,8 @@ import { ref } from 'vue'
 import TestUI from './testui/TestUI.vue'
 import NewUI from './NewUI.vue'
 
-// Set default to 'test' so your app boots up exactly how it used to
-const mode = ref('test')
+// Changed from 'test' to 'new' so it boots into the polished UI by default
+const mode = ref('new')
 </script>
 
 <template>
@@ -37,5 +37,3 @@ const mode = ref('test')
 }
 .dev-toggle:hover { background: #d000d0; }
 </style>
-
-

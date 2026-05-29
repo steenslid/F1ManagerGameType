@@ -5,34 +5,63 @@ import { api } from '../api.js'
 const emit = defineEmits(['saveLoaded'])
 
 const saves = ref([])
+const availableTeams = ref([])
 const isLoading = ref(true)
+
+// Form state
 const newSaveName = ref('')
+const managerName = ref('Player')
+const selectedTeamId = ref('')
 const isCreating = ref(false)
 
 onMounted(async () => {
-  await fetchSaves()
+  isLoading.value = true
+  await Promise.all([
+    fetchSaves(),
+    fetchTeams()
+  ])
+  isLoading.value = false
 })
 
 const fetchSaves = async () => {
-  isLoading.value = true
   try {
     const res = await api.listSaves()
     saves.value = res.data || []
   } catch (e) {
     console.error("Failed to fetch saves", e)
-  } finally {
-    isLoading.value = false
+  }
+}
+
+const fetchTeams = async () => {
+  try {
+    // Assuming your backend can list the base teams before a save is loaded
+    const res = await api.listTeams()
+    availableTeams.value = res.data || []
+  } catch (e) {
+    console.error("Failed to fetch base teams for new save", e)
   }
 }
 
 const createNewGame = async () => {
-  if (!newSaveName.value.trim()) return
+  if (!newSaveName.value.trim() || !managerName.value.trim() || !selectedTeamId.value) return
+
   isCreating.value = true
   try {
-    const res = await api.createSave({ name: newSaveName.value })
-    if (res.data && res.data.id) {
-      await api.loadSave(res.data.id)
+    // NOTE: If your Kotlin CreateSaveRequest DTO expects 'playerTeamId' instead of 'teamId',
+    // change the key below to match it.
+    const payload = {
+      saveName: newSaveName.value,
+      managerName: managerName.value,
+      teamId: selectedTeamId.value
     }
+
+    const res = await api.createSave(payload)
+
+    const newId = res.data?.id || res.data?.saveId || res.data
+    if (newId && typeof newId === 'string') {
+      await api.loadSave(newId)
+    }
+
     emit('saveLoaded')
   } catch (e) {
     console.error("Failed to create save", e)
@@ -41,19 +70,22 @@ const createNewGame = async () => {
   }
 }
 
-const loadGame = async (saveId) => {
+const loadGame = async (save) => {
   try {
-    await api.loadSave(saveId)
+    const id = save.id || save.saveId || save.uuid
+    if (!id) return
+    await api.loadSave(id)
     emit('saveLoaded')
   } catch (e) {
     console.error("Failed to load save", e)
   }
 }
 
-const deleteSave = async (saveId) => {
+const deleteSave = async (save) => {
   if (!confirm("Are you sure you want to delete this career?")) return
   try {
-    await api.deleteSave(saveId)
+    const id = save.id || save.saveId || save.uuid
+    await api.deleteSave(id)
     await fetchSaves()
   } catch (e) {
     console.error("Failed to delete save", e)
@@ -70,6 +102,7 @@ const deleteSave = async (saveId) => {
 
     <div class="launcher-grid">
 
+      <!-- CREATE NEW SAVE -->
       <div class="card create-card">
         <div class="card-header">
           <h2>New Career</h2>
@@ -82,19 +115,38 @@ const deleteSave = async (saveId) => {
               v-model="newSaveName"
               type="text"
               placeholder="e.g. My F1 Dynasty"
-              @keyup.enter="createNewGame"
           />
+        </div>
+
+        <div class="input-group">
+          <label>Principal Name</label>
+          <input
+              v-model="managerName"
+              type="text"
+              placeholder="e.g. Toto Wolff"
+          />
+        </div>
+
+        <div class="input-group">
+          <label>Select Constructor</label>
+          <select v-model="selectedTeamId">
+            <option disabled value="">-- Choose your Team --</option>
+            <option v-for="team in availableTeams" :key="team.id" :value="team.id">
+              {{ team.name }}
+            </option>
+          </select>
         </div>
 
         <button
             class="btn block-btn"
-            :disabled="!newSaveName.trim() || isCreating"
+            :disabled="!newSaveName.trim() || !managerName.trim() || !selectedTeamId || isCreating"
             @click="createNewGame"
         >
           {{ isCreating ? 'Initializing...' : 'Start New Game' }}
         </button>
       </div>
 
+      <!-- LOAD EXISTING SAVES -->
       <div class="card load-card">
         <div class="card-header">
           <h2>Load Career</h2>
@@ -107,16 +159,16 @@ const deleteSave = async (saveId) => {
         </div>
 
         <div v-else class="saves-list">
-          <div class="save-item" v-for="save in saves" :key="save.id">
-            <div class="save-info" @click="loadGame(save.id)">
-              <div class="save-name">{{ save.name || save.saveName || save.id }}</div>
+          <div class="save-item" v-for="save in saves" :key="save.id || save.saveId">
+            <div class="save-info" @click="loadGame(save)">
+              <div class="save-name">{{ save.name || save.saveName || 'Unnamed Save' }}</div>
               <div class="save-meta faint">
-                Season {{ save.currentSeasonYear || 2026 }} • Round {{ save.currentRound || 1 }}
+                Principal: {{ save.managerName || 'Unknown' }} • Season {{ save.currentSeasonYear || 2026 }}
               </div>
             </div>
             <div class="save-actions">
-              <button class="btn-cancel btn-small" @click="deleteSave(save.id)">Delete</button>
-              <button class="btn btn-small" @click="loadGame(save.id)">Load</button>
+              <button class="btn-cancel btn-small" @click="deleteSave(save)">Delete</button>
+              <button class="btn btn-small" @click="loadGame(save)">Load</button>
             </div>
           </div>
         </div>
@@ -183,16 +235,16 @@ const deleteSave = async (saveId) => {
 .p-20 { padding: 20px; }
 
 /* Form inputs */
-.input-group { margin-bottom: 24px; display: flex; flex-direction: column; gap: 8px; }
+.input-group { margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px; }
 .input-group label { font-size: 11px; color: var(--muted); text-transform: uppercase; font-weight: 600; }
-input { background: var(--bg); border: 1px solid var(--line); color: var(--fg); padding: 14px; border-radius: 8px; font-size: 16px; width: 100%; outline: none; box-sizing: border-box;}
-input:focus { border-color: var(--accent); }
+input, select { background: var(--bg); border: 1px solid var(--line); color: var(--fg); padding: 14px; border-radius: 8px; font-size: 16px; width: 100%; outline: none; box-sizing: border-box; cursor: pointer; }
+input:focus, select:focus { border-color: var(--accent); }
 
 /* Buttons */
 .btn { background: var(--accent); color: #fff; border: none; padding: 12px 20px; border-radius: 8px; font-weight: 700; cursor: pointer; transition: 0.2s;}
 .btn:hover:not(:disabled) { filter: brightness(1.1); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.block-btn { width: 100%; font-size: 15px; }
+.block-btn { width: 100%; font-size: 15px; margin-top: 8px; }
 
 .btn-small { padding: 8px 14px; font-size: 12px; }
 .btn-cancel { background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; font-weight: 600; cursor: pointer; }
