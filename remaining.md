@@ -55,10 +55,15 @@ the user's repo should now contain all of them:
    `ai_aggression` scales the counter-bid bump (`COUNTER_BID_BONUS × (0.5 +
    aggression)`). `DriverMarketService` only; no schema change; no new RNG
    draws (determinism unchanged, values shift).
+12. `salary-hint` — driver-market "Suggested salary" (`FreeAgentDto.
+   recommendedSalary`) now reflects base bracket × `trait_market_value_modifier`
+   × age decay (neutral prestige, no noise) instead of a flat pace band, so
+   player offers are realistically guided. `DriverMarketService.
+   readFreeAgentsForView` only; no schema change.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
-recreate is needed — patches 2–11 are all code-only. Schema-per-save means no
+recreate is needed — patches 2–12 are all code-only. Schema-per-save means no
 migrations: a schema edit requires drop + recreate of test saves.
 
 **Files touched this chain** (latest version of each lives in the repo after

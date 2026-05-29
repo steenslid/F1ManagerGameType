@@ -889,6 +889,7 @@ class DriverMarketService(private val db: Database) {
             """
             SELECT d.id, d.name, d.nationality, d.current_age,
                    d.stat_pace, d.stat_qualifying, d.stat_consistency, d.morale,
+                   d.trait_peak_age, d.trait_market_value_modifier,
                    CASE WHEN o.driver_id IS NOT NULL THEN TRUE ELSE FALSE END AS has_offer
               FROM drivers d
               LEFT JOIN driver_market_offers o
@@ -906,12 +907,24 @@ class DriverMarketService(private val db: Database) {
                 buildList {
                     while (rs.next()) {
                         val pace = rs.getInt("stat_pace")
-                        val recommended = when {
+                        val base = when {
                             pace >= 90 -> 20_000_000L
                             pace >= 80 -> 8_000_000L
                             pace >= 70 -> 2_000_000L
                             else -> 500_000L
                         }
+                        // Market-rate hint: same shape as computeAiSalary at
+                        // neutral team prestige (factor 1.0) and no RNG noise —
+                        // base bracket × value modifier × age decay. Gives the
+                        // player a realistic suggested offer to pre-fill rather
+                        // than a flat pace-band number that ignores a star's
+                        // premium or a veteran's discount.
+                        val valueMod = rs.getDouble("trait_market_value_modifier")
+                        val yearsPastPeak =
+                            (rs.getInt("current_age") - rs.getInt("trait_peak_age")).coerceAtLeast(0)
+                        val ageFactor =
+                            (1.0 - yearsPastPeak * AGE_DECAY_PER_YEAR).coerceAtLeast(MIN_AGE_FACTOR)
+                        val recommended = (base * valueMod * ageFactor).toLong()
                         add(
                             FreeAgentDto(
                                 driverId = rs.getObject("id", UUID::class.java).toString(),
