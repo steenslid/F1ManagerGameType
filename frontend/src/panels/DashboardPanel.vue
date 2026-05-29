@@ -1,204 +1,217 @@
-﻿<script setup>
-import { ref, onMounted } from 'vue'
+<script setup>
+import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
+import { useGame } from '../useGame.js'
+import { fmtMoney, phaseLabel } from '../format.js'
 
-const emit = defineEmits(['saveLoaded'])
+const emit = defineEmits(['navigate'])
+const { state, myTeam, hasTeam } = useGame()
 
-const saves = ref([])
-const isLoading = ref(true)
+const driverStandings = ref([])
+const teamStandings = ref([])
+const loadingStandings = ref(false)
 
-// Form state
-const newSaveName = ref('')
-const managerName = ref('Player')
-const isCreating = ref(false)
+async function loadStandings() {
+  if (!state.overview?.year) return
+  loadingStandings.value = true
+  try {
+    const res = await api.getStandings({ type: 'both', season: state.overview.year })
+    driverStandings.value = res.data?.drivers || []
+    teamStandings.value = res.data?.teams || []
+  } catch {
+    driverStandings.value = []
+    teamStandings.value = []
+  } finally {
+    loadingStandings.value = false
+  }
+}
 
-onMounted(async () => {
-  await fetchSaves()
+onMounted(loadStandings)
+// Re-pull standings whenever the season or round changes (after an advance).
+watch(() => [state.overview?.year, state.overview?.round], loadStandings)
+
+const myTeamId = computed(() => state.overview?.playerTeam?.id || null)
+
+const finance = computed(() => myTeam.value?.finance || null)
+const net = computed(() => {
+  if (!finance.value) return 0
+  return (finance.value.currentYearIncome || 0) - (finance.value.currentYearExpenses || 0)
+})
+const incomeBarPct = computed(() => {
+  const f = finance.value
+  if (!f) return 0
+  const inc = f.currentYearIncome || 0
+  const exp = f.currentYearExpenses || 0
+  const total = inc + exp
+  return total > 0 ? Math.round((inc / total) * 100) : 0
 })
 
-const fetchSaves = async () => {
-  isLoading.value = true
-  try {
-    const res = await api.listSaves()
-    saves.value = res.data || []
-  } catch (e) {
-    console.error("Failed to fetch saves", e)
-  } finally {
-    isLoading.value = false
+const attention = computed(() => {
+  if (!hasTeam.value) {
+    return { msg: 'No team selected', sub: 'Pick a constructor to take control of from the Teams screen.', go: 'Choose a team', target: 'Teams' }
   }
-}
-
-const createNewGame = async () => {
-  if (!newSaveName.value.trim() || !managerName.value.trim()) return
-
-  isCreating.value = true
-  try {
-    // Send exactly what the CreateSaveRequest DTO requires
-    const payload = {
-      saveName: newSaveName.value,
-      managerName: managerName.value
-    }
-
-    const res = await api.createSave(payload)
-
-    const newId = res.data?.id || res.data?.saveId || res.data
-    if (newId && typeof newId === 'string') {
-      await api.loadSave(newId)
-    }
-
-    emit('saveLoaded')
-  } catch (e) {
-    console.error("Failed to create save", e)
-  } finally {
-    isCreating.value = false
+  const p = state.overview?.phase
+  const track = state.currentRace?.trackName
+  switch (p) {
+    case 'OFF_SEASON':
+      return { msg: 'Off-season', sub: 'Advance to open the driver market.', go: null }
+    case 'DRIVER_MARKET':
+      return { msg: 'Driver market is open', sub: 'Submit contract offers to free agents before the rounds resolve.', go: 'Open market', target: 'Market' }
+    case 'PRE_SEASON':
+      return { msg: 'Pre-season', sub: 'Advance to start the opening round.', go: null }
+    case 'PRACTICE':
+      return { msg: track ? `Practice open at ${track}` : 'Practice open', sub: 'Set a practice focus for your drivers before qualifying.', go: 'Set focus', target: 'Race Weekend' }
+    case 'QUALIFYING':
+    case 'SPRINT_QUALIFYING':
+      return { msg: 'Qualifying', sub: 'Pick a strategy archetype for each of your drivers.', go: 'Set strategy', target: 'Race Weekend' }
+    case 'RACE':
+    case 'SPRINT':
+      return { msg: 'Lights out', sub: 'Advance to run the session, then review the results.', go: 'Race weekend', target: 'Race Weekend' }
+    case 'POST_RACE':
+      return { msg: 'Session complete', sub: 'Review the results, then advance to the next round.', go: 'View results', target: 'Race Weekend' }
+    case 'BETWEEN_ROUNDS':
+      return { msg: 'Between rounds', sub: 'Advance to begin the next race weekend.', go: null }
+    case 'END_OF_SEASON':
+      return { msg: 'Season complete', sub: 'Advance into the off-season to settle the books.', go: null }
+    default:
+      return { msg: phaseLabel(p), sub: '', go: null }
   }
-}
+})
 
-const loadGame = async (save) => {
-  try {
-    const id = save.id || save.saveId || save.uuid
-    if (!id) return
-    await api.loadSave(id)
-    emit('saveLoaded')
-  } catch (e) {
-    console.error("Failed to load save", e)
-  }
-}
-
-const deleteSave = async (save) => {
-  if (!confirm("Are you sure you want to delete this career?")) return
-  try {
-    const id = save.id || save.saveId || save.uuid
-    await api.deleteSave(id)
-    await fetchSaves()
-  } catch (e) {
-    console.error("Failed to delete save", e)
-  }
+function posClass(pos) {
+  return pos === 1 ? 'p1' : pos === 2 ? 'p2' : pos === 3 ? 'p3' : ''
 }
 </script>
 
 <template>
-  <div class="launcher-wrap">
-    <div class="brand-hero">
-      <h1>F1<b>SIM</b></h1>
-      <p class="subtitle">Managerial Career</p>
+  <h1 class="page-title">Dashboard</h1>
+
+  <div class="card attn" :class="{ warn: !hasTeam }">
+    <span class="dot"></span>
+    <div>
+      <div class="msg">{{ attention.msg }}</div>
+      <div class="sub">{{ attention.sub }}</div>
     </div>
+    <span v-if="attention.go" class="go" @click="emit('navigate', attention.target)">{{ attention.go }} →</span>
+  </div>
 
-    <div class="launcher-grid">
-
-      <!-- CREATE NEW SAVE -->
-      <div class="card create-card">
-        <div class="card-header">
-          <h2>New Career</h2>
-        </div>
-        <p class="faint desc">Start a new managerial journey from the beginning of the selected season.</p>
-
-        <div class="input-group">
-          <label>Save Name</label>
-          <input
-              v-model="newSaveName"
-              type="text"
-              placeholder="e.g. My F1 Dynasty"
-              @keyup.enter="createNewGame"
-          />
-        </div>
-
-        <div class="input-group">
-          <label>Principal Name</label>
-          <input
-              v-model="managerName"
-              type="text"
-              placeholder="e.g. Toto Wolff"
-              @keyup.enter="createNewGame"
-          />
-        </div>
-
-        <button
-            class="btn block-btn"
-            :disabled="!newSaveName.trim() || !managerName.trim() || isCreating"
-            @click="createNewGame"
-        >
-          {{ isCreating ? 'Initializing...' : 'Start New Game' }}
-        </button>
-      </div>
-
-      <!-- LOAD EXISTING SAVES -->
-      <div class="card load-card">
-        <div class="card-header">
-          <h2>Load Career</h2>
-        </div>
-
-        <div v-if="isLoading" class="faint text-center p-20">Loading saves...</div>
-
-        <div v-else-if="saves.length === 0" class="faint text-center p-20">
-          No previous saves found.
-        </div>
-
-        <div v-else class="saves-list">
-          <div class="save-item" v-for="save in saves" :key="save.id || save.saveId">
-            <div class="save-info" @click="loadGame(save)">
-              <div class="save-name">{{ save.name || save.saveName || 'Unnamed Save' }}</div>
-              <div class="save-meta faint">
-                Principal: {{ save.managerName || 'Unknown' }} • Season {{ save.currentSeasonYear || 2026 }}
-              </div>
-            </div>
-            <div class="save-actions">
-              <button class="btn-cancel btn-small" @click="deleteSave(save)">Delete</button>
-              <button class="btn btn-small" @click="loadGame(save)">Load</button>
+  <div class="grid">
+    <div class="col">
+      <!-- Next session -->
+      <div class="card">
+        <h2>Next session</h2>
+        <div v-if="state.currentRace" class="race">
+          <div class="flag">{{ phaseLabel(state.overview?.phase) === 'Practice' ? '🏁' : '🏎️' }}</div>
+          <div>
+            <div class="nm">{{ state.currentRace.trackName }}</div>
+            <div class="loc">{{ state.currentRace.trackCountry }} · Round {{ state.currentRace.round }}</div>
+            <div class="tags">
+              <span v-if="state.currentRace.sessionFormat === 'SPRINT'" class="tag sprint">Sprint weekend</span>
+              <span class="tag">{{ phaseLabel(state.overview?.phase) }}</span>
             </div>
           </div>
         </div>
+        <div v-else class="faint empty">
+          No race weekend in progress — currently {{ phaseLabel(state.overview?.phase) }}.
+        </div>
       </div>
 
+      <!-- Drivers' championship -->
+      <div class="card">
+        <h2>Drivers' championship</h2>
+        <div v-if="loadingStandings" class="faint empty">Loading…</div>
+        <table v-else-if="driverStandings.length">
+          <thead><tr><th style="width:34px">#</th><th>Driver</th><th>Team</th><th class="r">Pts</th></tr></thead>
+          <tbody>
+            <tr v-for="d in driverStandings" :key="d.driverId" :class="{ me: d.teamId === myTeamId }">
+              <td><span class="pos" :class="posClass(d.position)">{{ d.position }}</span></td>
+              <td>{{ d.driverName }}</td>
+              <td class="faint">{{ d.teamName }}</td>
+              <td class="r num">{{ d.points }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="faint empty">No race results yet this season.</div>
+      </div>
+    </div>
+
+    <div class="col">
+      <!-- Constructors -->
+      <div class="card">
+        <h2>Constructors</h2>
+        <div v-if="loadingStandings" class="faint empty">Loading…</div>
+        <table v-else-if="teamStandings.length">
+          <thead><tr><th style="width:34px">#</th><th>Team</th><th class="r">Pts</th></tr></thead>
+          <tbody>
+            <tr v-for="t in teamStandings" :key="t.teamId" :class="{ me: t.teamId === myTeamId }">
+              <td><span class="pos" :class="posClass(t.position)">{{ t.position }}</span></td>
+              <td>{{ t.teamName }}</td>
+              <td class="r num">{{ t.points }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="faint empty">No standings yet.</div>
+      </div>
+
+      <!-- Finances -->
+      <div class="card fin">
+        <h2>Finances · {{ state.overview?.year }}</h2>
+        <div v-if="finance">
+          <div class="row"><span class="big num">{{ fmtMoney(finance.cashReserves) }}</span><span class="lab">cash reserves</span></div>
+          <div class="row"><span class="lab">Projected income</span><span class="num pos-v">+{{ fmtMoney(finance.currentYearIncome) }}</span></div>
+          <div class="row"><span class="lab">Projected expenses</span><span class="num neg-v">−{{ fmtMoney(finance.currentYearExpenses) }}</span></div>
+          <div class="bar"><span :style="{ width: incomeBarPct + '%' }"></span></div>
+          <div class="row" style="margin-top:6px"><span class="lab">Net</span>
+            <span class="num" :class="net >= 0 ? 'pos-v' : 'neg-v'">{{ net >= 0 ? '+' : '−' }}{{ fmtMoney(Math.abs(net)) }}</span>
+          </div>
+        </div>
+        <div v-else class="faint empty">Select a team to see its finances.</div>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.launcher-wrap {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 40px;
-  background: radial-gradient(circle at 50% 0%, var(--surface-2) 0%, var(--bg) 60%);
-}
+.page-title { font-size: 18px; margin: 4px 0 18px; font-weight: 700; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+.card h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 0 0 12px; font-weight: 700; }
+.empty { padding: 8px 0; font-size: 13px; }
 
-.brand-hero { text-align: center; margin-bottom: 40px; }
-.brand-hero h1 { font-size: 48px; font-weight: 800; letter-spacing: 2px; color: #fff; margin: 0; }
-.brand-hero h1 b { color: var(--accent); }
-.subtitle { color: var(--muted); text-transform: uppercase; letter-spacing: 4px; font-size: 14px; margin-top: 8px; }
+.attn { display: flex; align-items: center; gap: 12px; border-left: 3px solid var(--accent); background: var(--surface-2); margin-bottom: 16px; }
+.attn.warn { border-left-color: var(--warn); }
+.attn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.attn.warn .dot { background: var(--warn); box-shadow: 0 0 0 4px #e0b34122; }
+.attn .msg { font-weight: 600; }
+.attn .sub { color: var(--muted); font-size: 12px; }
+.attn .go { margin-left: auto; font-size: 12px; color: #ff7066; font-weight: 700; cursor: pointer; }
+.attn .go:hover { text-decoration: underline; }
 
-.launcher-grid { display: grid; grid-template-columns: 1fr 1.5fr; gap: 24px; width: 100%; max-width: 900px; }
+.grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
+.col { display: flex; flex-direction: column; gap: 16px; }
 
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-.card-header h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 0 0 16px; font-weight: 700; }
+.race { display: flex; gap: 18px; align-items: center; }
+.flag { width: 74px; height: 74px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; font-size: 30px; border: 1px solid var(--line); }
+.race .nm { font-size: 17px; font-weight: 700; }
+.race .loc { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.tags { display: flex; gap: 6px; margin-top: 9px; }
+.tag { font-size: 10px; letter-spacing: .5px; text-transform: uppercase; padding: 3px 8px; border-radius: 6px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
+.tag.sprint { color: var(--warn); border-color: #e0b34155; }
 
-.desc { margin-bottom: 24px; font-size: 14px; line-height: 1.5; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { font-size: 10px; text-transform: uppercase; letter-spacing: .6px; color: var(--faint); text-align: left; padding: 0 8px 8px; font-weight: 600; }
+td { padding: 7px 8px; border-top: 1px solid var(--line); }
+td.r, th.r { text-align: right; }
+tr.me td { background: var(--accent-soft); }
+.pos { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: var(--surface-2); font-weight: 700; font-size: 12px; }
+.pos.p1 { background: #d9a441; color: #1a1305; }
+.pos.p2 { background: #9aa3ad; color: #10151a; }
+.pos.p3 { background: #b4724a; color: #160d06; }
+
+.fin .row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.fin .lab { color: var(--muted); font-size: 12px; }
+.fin .big { font-size: 22px; font-weight: 800; }
+.pos-v { color: var(--good); } .neg-v { color: var(--bad); }
+.bar { height: 6px; border-radius: 4px; background: var(--surface-2); overflow: hidden; margin-top: 4px; }
+.bar > span { display: block; height: 100%; background: var(--accent); }
 .faint { color: var(--faint); }
-.text-center { text-align: center; }
-.p-20 { padding: 20px; }
-
-.input-group { margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px; }
-.input-group label { font-size: 11px; color: var(--muted); text-transform: uppercase; font-weight: 600; }
-input { background: var(--bg); border: 1px solid var(--line); color: var(--fg); padding: 14px; border-radius: 8px; font-size: 16px; width: 100%; outline: none; box-sizing: border-box; }
-input:focus { border-color: var(--accent); }
-
-.btn { background: var(--accent); color: #fff; border: none; padding: 12px 20px; border-radius: 8px; font-weight: 700; cursor: pointer; transition: 0.2s;}
-.btn:hover:not(:disabled) { filter: brightness(1.1); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.block-btn { width: 100%; font-size: 15px; margin-top: 8px; }
-
-.btn-small { padding: 8px 14px; font-size: 12px; }
-.btn-cancel { background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; font-weight: 600; cursor: pointer; }
-.btn-cancel:hover { background: var(--surface-2); color: var(--fg); }
-
-.saves-list { display: flex; flex-direction: column; }
-.save-item { display: flex; justify-content: space-between; align-items: center; padding: 16px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; background: var(--bg); transition: 0.2s; }
-.save-item:hover { border-color: var(--muted); }
-.save-info { flex: 1; cursor: pointer; }
-.save-name { font-weight: 700; font-size: 16px; margin-bottom: 4px; color: #fff; }
-.save-meta { font-size: 12px; }
-.save-actions { display: flex; gap: 8px; }
 </style>

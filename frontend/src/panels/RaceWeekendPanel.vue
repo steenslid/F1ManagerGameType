@@ -1,301 +1,268 @@
-﻿<script setup>
-import { ref, onMounted } from 'vue'
+<script setup>
+import { ref, computed, watch, onMounted } from 'vue'
 import { api } from '../api.js'
+import { useGame } from '../useGame.js'
+import { phaseLabel } from '../format.js'
 
-const activeTab = ref('hub') // 'hub', 'strategy', 'results'
-const isLoading = ref(true)
+const { state, myTeam, inRaceWeekend, advanceLabel, advance } = useGame()
 
-// Empty refs ready for actual API data
-const track = ref({})
-const currentPhase = ref('')
-const schedule = ref([])
-const driversStrategy = ref([])
-const recentResults = ref([])
-const playerTeamName = ref('')
+const loading = ref(false)
+const error = ref(null)
 
-onMounted(async () => {
-  isLoading.value = true
-  try {
-    // Fetch all weekend context in parallel.
-    // We use .catch() to prevent one missing endpoint from breaking the whole page while you build them.
-    const [raceRes, stateRes, weekendRes, resultsRes, teamRes] = await Promise.all([
-      api.getCurrentRace().catch(() => ({ data: {} })),
-      api.getGameState().catch(() => ({ data: {} })),
-      api.getRaceWeekend().catch(() => ({ data: [] })), // Expected to hit RaceWeekendRoutes.kt
-      api.getRaceResults().catch(() => ({ data: [] })), // Expected to hit RaceResultsRoutes.kt
-      api.listTeams().catch(() => ({ data: [] }))
-    ])
+const practice = ref(null)   // PracticeViewDto
+const strategy = ref(null)   // StrategyViewDto
+const results = ref([])      // RaceResultDto[]
+const sprintResults = ref([])
 
-    track.value = raceRes.data || {}
-    currentPhase.value = stateRes.data?.phase || 'UNKNOWN'
-    schedule.value = weekendRes.data || []
-    recentResults.value = resultsRes.data || []
+const FOCUS_OPTIONS = [
+  { value: 'SETUP', label: 'Setup (+pace)' },
+  { value: 'TYRE_PROGRAM', label: 'Tyre Program' },
+  { value: 'RELIABILITY_CHECK', label: 'Reliability Check' },
+  { value: 'DEVELOPMENT_FEEDBACK', label: 'Development Feedback' },
+]
+const ARCHETYPE_OPTIONS = [
+  { value: 'M_H', label: 'Medium → Hard (safe)' },
+  { value: 'S_H', label: 'Soft → Hard' },
+  { value: 'S_M_M', label: 'Soft → Medium → Medium' },
+  { value: 'M_M_H', label: 'Medium → Medium → Hard' },
+  { value: 'S_S_H', label: 'Soft → Soft → Hard (aggressive)' },
+]
 
-    // Dynamically build the Strategy UI for the player's actual drivers
-    const playerTeamId = stateRes.data?.playerTeamId
-    if (playerTeamId && teamRes.data) {
-      const myTeam = teamRes.data.find(t => t.id === playerTeamId)
-      if (myTeam) {
-        playerTeamName.value = myTeam.name
+const phase = computed(() => state.overview?.phase)
+const myTeamId = computed(() => myTeam.value?.id || null)
 
-        // Assuming drivers are nested in the team response, or fetch them via api.listDrivers({teamId})
-        const myDrivers = myTeam.drivers || []
-
-        driversStrategy.value = myDrivers.map(driver => ({
-          driverId: driver.id,
-          name: driver.name,
-          tyre: 'Soft', // Default, ideally fetched from driver.currentTyre
-          pace: 'Balanced' // Default, ideally fetched from driver.currentPace
-        }))
-      }
-    }
-
-  } catch (e) {
-    console.error("Failed to load race weekend", e)
-  } finally {
-    isLoading.value = false
+const step = computed(() => {
+  switch (phase.value) {
+    case 'PRACTICE': return 'practice'
+    case 'QUALIFYING':
+    case 'SPRINT_QUALIFYING': return 'strategy'
+    case 'RACE':
+    case 'SPRINT':
+    case 'POST_RACE': return 'results'
+    default: return 'none'
   }
 })
 
-const simulateSession = async () => {
+// Only the player's own drivers are editable here.
+const myPracticeEntries = computed(() =>
+  (practice.value?.entries || []).filter((e) => e.teamId === myTeamId.value)
+)
+const myStrategyEntries = computed(() =>
+  (strategy.value?.entries || []).filter((e) => e.teamId === myTeamId.value)
+)
+const sortedResults = computed(() =>
+  [...results.value].sort((a, b) => (a.finishingPosition ?? 999) - (b.finishingPosition ?? 999))
+)
+
+async function loadForStep() {
+  error.value = null
+  practice.value = null
+  strategy.value = null
+  results.value = []
+  sprintResults.value = []
+  if (step.value === 'none' || !state.currentRace) return
+
+  loading.value = true
   try {
-    console.log("Submitting strategy payload:", driversStrategy.value)
-    // 1. Submit the strategies to the backend first
-    // await api.submitStrategy(driversStrategy.value)
-
-    // 2. Trigger the state machine to simulate the session
-    // await api.advanceGame()
-
-    // 3. Fetch the fresh results and jump to the results tab
-    const resultsRes = await api.getRaceResults()
-    recentResults.value = resultsRes.data || []
-    activeTab.value = 'results'
-
+    if (step.value === 'practice') {
+      practice.value = (await api.viewPractice()).data
+    } else if (step.value === 'strategy') {
+      strategy.value = (await api.viewStrategy()).data
+    } else if (step.value === 'results') {
+      const raceId = state.currentRace.raceId
+      const [rr, sr] = await Promise.all([
+        api.listRaceResults({ race: raceId }).catch(() => ({ data: [] })),
+        api.listSprintResults({ race: raceId }).catch(() => ({ data: [] })),
+      ])
+      results.value = rr.data || []
+      sprintResults.value = sr.data || []
+    }
   } catch (e) {
-    console.error("Failed to simulate session", e)
+    error.value = e.message || String(e)
+  } finally {
+    loading.value = false
   }
 }
+
+onMounted(loadForStep)
+watch(() => [phase.value, state.currentRace?.raceId], loadForStep)
+
+async function saveFocus(entry, focus) {
+  error.value = null
+  try {
+    practice.value = (await api.setPracticeFocus(entry.driverId, focus)).data
+  } catch (e) {
+    error.value = e.message || String(e)
+  }
+}
+async function saveStrategy(entry, archetype) {
+  error.value = null
+  try {
+    strategy.value = (await api.setStrategy(entry.driverId, archetype)).data
+  } catch (e) {
+    error.value = e.message || String(e)
+  }
+}
+
+function tyreClass(status) { return '' }
 </script>
 
 <template>
-  <div class="card wrapper">
-    <!-- INTERNAL HEADER & TABS -->
+  <div class="card">
     <div class="card-header">
-      <div class="header-titles">
-        <h2>{{ track.name || 'Awaiting Calendar' }}</h2>
-        <span class="faint loc">{{ track.location || 'Unknown Location' }}</span>
+      <div>
+        <h2 v-if="state.currentRace">{{ state.currentRace.trackName }}</h2>
+        <h2 v-else>Race Weekend</h2>
+        <span v-if="state.currentRace" class="faint loc">
+          {{ state.currentRace.trackCountry }} · Round {{ state.currentRace.round }}
+          <span v-if="state.currentRace.sessionFormat === 'SPRINT'" class="sprint">· Sprint</span>
+        </span>
       </div>
-
-      <div class="tabs">
-        <button :class="{ active: activeTab === 'hub' }" @click="activeTab = 'hub'">Weekend Hub</button>
-        <button :class="{ active: activeTab === 'strategy' }" @click="activeTab = 'strategy'">Setup & Strategy</button>
-        <button :class="{ active: activeTab === 'results' }" @click="activeTab = 'results'">Session Results</button>
-      </div>
-    </div>
-
-    <div v-if="isLoading" class="faint p-20 text-center">Loading garage...</div>
-
-    <!-- TAB 1: WEEKEND HUB -->
-    <div v-else-if="activeTab === 'hub'" class="hub-grid">
-      <div class="action-panel">
-        <div class="track-hero">
-          <div class="track-details">
-            <div class="stat-group">
-              <span class="k">Laps</span>
-              <span class="v num">{{ track.laps || '--' }}</span>
-            </div>
-            <div class="stat-group">
-              <span class="k">Track Temp</span>
-              <span class="v num">{{ track.trackTemp || '--' }}</span>
-            </div>
-            <div class="stat-group">
-              <span class="k">Weather</span>
-              <span class="v">{{ track.weather || '--' }}</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="sim-box">
-          <h3>Current Phase: {{ currentPhase }}</h3>
-          <p class="faint">Ensure your strategy is set before heading out on track.</p>
-          <div class="sim-actions">
-            <button class="btn-cancel" @click="activeTab = 'strategy'">Review Strategy</button>
-            <button class="btn" @click="simulateSession">Simulate Session →</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="schedule-panel">
-        <h3 class="muted uppercase">Weekend Schedule</h3>
-        <div class="timeline">
-          <div
-              v-for="session in schedule"
-              :key="session.id"
-              class="timeline-item"
-              :class="{ 'is-active': session.status === 'ACTIVE', 'is-done': session.status === 'COMPLETED' }"
-          >
-            <div class="node"></div>
-            <div class="session-info">
-              <div class="session-name">{{ session.name }}</div>
-              <div class="session-status">{{ session.status }}</div>
-            </div>
-          </div>
-          <div v-if="!schedule.length" class="faint">Schedule data not available.</div>
-        </div>
+      <div class="phase-now">
+        <span class="phase-pill">{{ phaseLabel(phase) }}</span>
+        <button class="btn" :disabled="state.advancing" @click="advance">
+          {{ state.advancing ? 'Advancing…' : advanceLabel }}
+        </button>
       </div>
     </div>
 
-    <!-- TAB 2: STRATEGY & SETUP -->
-    <div v-else-if="activeTab === 'strategy'" class="strategy-grid">
-      <div class="driver-card" v-for="driver in driversStrategy" :key="driver.driverId">
-        <div class="driver-header">
-          <div class="crest">{{ driver.name ? driver.name.substring(0,2).toUpperCase() : 'DR' }}</div>
-          <div class="name">{{ driver.name }}</div>
-        </div>
+    <div v-if="error" class="error-banner">{{ error }}</div>
 
-        <div class="settings-group">
-          <label>Tyre Compound</label>
-          <select v-model="driver.tyre">
-            <option value="Soft">Soft (Red)</option>
-            <option value="Medium">Medium (Yellow)</option>
-            <option value="Hard">Hard (White)</option>
-            <option value="Intermediate">Intermediate (Green)</option>
-            <option value="Wet">Wet (Blue)</option>
+    <!-- Not in a race weekend -->
+    <div v-if="step === 'none'" class="empty-state">
+      <div class="big">No active session</div>
+      <p class="faint">It's currently <b>{{ phaseLabel(phase) }}</b>. Use Advance to move toward the next race weekend.</p>
+    </div>
+
+    <div v-else-if="loading" class="faint p-20">Loading session…</div>
+
+    <!-- PRACTICE: focus -->
+    <div v-else-if="step === 'practice'">
+      <p class="hint faint">Set a practice focus for each of your drivers. <b>Setup</b> grants a small qualifying/pace boost; the others are placeholders for now.</p>
+      <div v-if="!myTeamId" class="faint p-20">Select a team first to set focus.</div>
+      <div v-else class="driver-cards">
+        <div class="driver-card" v-for="e in myPracticeEntries" :key="e.driverId">
+          <div class="dc-head">{{ e.driverName }}</div>
+          <label>Practice Focus</label>
+          <select :value="e.focus || ''" :disabled="!practice?.canEdit" @change="saveFocus(e, $event.target.value)">
+            <option value="" disabled>Choose a focus…</option>
+            <option v-for="o in FOCUS_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
           </select>
         </div>
-
-        <div class="settings-group">
-          <label>Driving Pace</label>
-          <select v-model="driver.pace">
-            <option value="Conserve">Conserve (Save Tyres)</option>
-            <option value="Balanced">Balanced</option>
-            <option value="Push">Push</option>
-            <option value="Attack">Attack (High Wear)</option>
-          </select>
-        </div>
-      </div>
-      <div v-if="!driversStrategy.length" class="faint p-20" style="grid-column: span 2; text-align: center;">
-        No drivers currently contracted to your team.
+        <div v-if="!myPracticeEntries.length" class="faint p-20">No drivers contracted to your team.</div>
       </div>
     </div>
 
-    <!-- TAB 3: SESSION RESULTS -->
-    <div v-else-if="activeTab === 'results'">
+    <!-- QUALIFYING: strategy -->
+    <div v-else-if="step === 'strategy'">
+      <p class="hint faint">Pick a race strategy for each of your drivers. Grid positions appear once qualifying has been simulated.</p>
+      <div v-if="!myTeamId" class="faint p-20">Select a team first to set strategy.</div>
+      <div v-else class="driver-cards">
+        <div class="driver-card" v-for="e in myStrategyEntries" :key="e.driverId">
+          <div class="dc-head">
+            {{ e.driverName }}
+            <span v-if="e.gridPosition" class="grid-pill">P{{ e.gridPosition }}</span>
+          </div>
+          <label>Strategy</label>
+          <select :value="e.archetype || ''" :disabled="!strategy?.canEdit" @change="saveStrategy(e, $event.target.value)">
+            <option value="" disabled>Choose a strategy…</option>
+            <option v-for="o in ARCHETYPE_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+          </select>
+        </div>
+        <div v-if="!myStrategyEntries.length" class="faint p-20">No drivers contracted to your team.</div>
+      </div>
+
+      <h3 class="section">Provisional grid</h3>
       <table class="data-table">
-        <thead>
-        <tr>
-          <th class="r" style="width: 50px;">Pos</th>
-          <th>Driver</th>
-          <th>Team</th>
-          <th class="r">Gap / Time</th>
-          <th class="text-center" style="width: 80px;">Tyre</th>
-        </tr>
-        </thead>
+        <thead><tr><th class="r">Grid</th><th>Driver</th><th>Team</th><th>Strategy</th></tr></thead>
         <tbody>
-        <tr v-for="res in recentResults" :key="res.driverId || res.driver" :class="{ 'is-player': res.teamName === playerTeamName }">
-          <td class="r num">{{ res.position || res.pos }}</td>
-          <td class="name">{{ res.driverName || res.driver }}</td>
-          <td class="faint">{{ res.teamName || res.team }}</td>
-          <td class="r num">{{ res.gap || res.time || '--' }}</td>
-          <td class="text-center">
-              <span v-if="res.tyre" class="tyre-pill" :class="(res.tyre || '').toLowerCase().charAt(0)">
-                {{ (res.tyre || '').charAt(0).toUpperCase() }}
-              </span>
-            <span v-else>--</span>
-          </td>
-        </tr>
-        <tr v-if="!recentResults.length">
-          <td colspan="5" class="faint text-center p-20">No results available for this session yet.</td>
-        </tr>
+          <tr v-for="e in strategy?.entries || []" :key="e.driverId" :class="{ me: e.teamId === myTeamId }">
+            <td class="r num">{{ e.gridPosition || '—' }}</td>
+            <td class="name">{{ e.driverName }}</td>
+            <td class="faint">{{ e.teamName }}</td>
+            <td class="faint">{{ e.archetype || '—' }}</td>
+          </tr>
         </tbody>
       </table>
     </div>
 
+    <!-- RACE / POST_RACE: results -->
+    <div v-else-if="step === 'results'">
+      <div v-if="sprintResults.length">
+        <h3 class="section">Sprint result</h3>
+        <table class="data-table">
+          <thead><tr><th class="r">Pos</th><th>Driver</th><th>Team</th><th class="r">Pts</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr v-for="r in [...sprintResults].sort((a,b)=>(a.finishingPosition??999)-(b.finishingPosition??999))" :key="r.driverId" :class="{ me: r.teamId === myTeamId }">
+              <td class="r num">{{ r.finishingPosition || '—' }}</td>
+              <td class="name">{{ r.driverName }}</td>
+              <td class="faint">{{ r.teamName }}</td>
+              <td class="r num">{{ r.points }}</td>
+              <td><span class="status" :class="r.status.toLowerCase()">{{ r.status }}</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="section">Race result</h3>
+      <table class="data-table" v-if="sortedResults.length">
+        <thead><tr><th class="r">Pos</th><th>Driver</th><th>Team</th><th class="r">Grid</th><th class="r">Pts</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr v-for="r in sortedResults" :key="r.driverId" :class="{ me: r.teamId === myTeamId }">
+            <td class="r num">{{ r.finishingPosition || '—' }}</td>
+            <td class="name">{{ r.driverName }}<span v-if="r.pole" class="tag">Pole</span><span v-if="r.fastestLap" class="tag fl">FL</span></td>
+            <td class="faint">{{ r.teamName }}</td>
+            <td class="r num">{{ r.gridPosition || '—' }}</td>
+            <td class="r num">{{ r.points }}</td>
+            <td><span class="status" :class="r.status.toLowerCase()">{{ r.status }}</span>
+              <span v-if="r.dnfCause" class="faint dnf">{{ r.dnfCause }}</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="faint p-20">No race result yet — advance through the {{ phaseLabel(phase) }} phase to run the simulation.</div>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.wrapper { min-height: 500px; display: flex; flex-direction: column; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; }
+.card-header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 1px solid var(--line); padding-bottom: 16px; margin-bottom: 18px; gap: 16px; }
+.card-header h2 { margin: 0 0 4px; font-size: 20px; font-weight: 800; }
+.loc { font-size: 13px; }
+.sprint { color: var(--warn); }
+.phase-now { display: flex; align-items: center; gap: 12px; }
+.phase-pill { padding: 4px 10px; border-radius: 20px; background: var(--accent-soft); color: #ff7066; border: 1px solid #e1060055; font-weight: 700; font-size: 11px; }
+.btn { background: var(--accent); color: #fff; border: none; padding: 9px 16px; border-radius: 8px; font-weight: 700; font-size: 13px; cursor: pointer; }
+.btn:hover:not(:disabled) { filter: brightness(1.1); }
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+.error-banner { background: var(--accent-soft); border: 1px solid #e1060055; color: #ff7066; padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 12px; }
 
-/* Header & Tabs */
-.card-header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 1px solid var(--line); padding-bottom: 16px; margin-bottom: 20px; }
-.header-titles h2 { margin: 0 0 4px 0; font-size: 20px; font-weight: 800; }
-.header-titles .loc { font-size: 13px; }
+.empty-state { text-align: center; padding: 40px 20px; }
+.empty-state .big { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+.hint { font-size: 13px; margin: 0 0 16px; }
 
-.tabs { display: flex; }
-.tabs button { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 8px 16px; font-size: 13px; cursor: pointer; font-weight: 600; transition: 0.2s; }
-.tabs button:first-child { border-radius: 6px 0 0 6px; border-right: none; }
-.tabs button:nth-child(2) { border-right: none; }
-.tabs button:last-child { border-radius: 0 6px 6px 0; }
-.tabs button:hover:not(.active) { background: var(--surface-2); color: var(--fg); }
-.tabs button.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); position: relative; z-index: 1; }
-
-.uppercase { text-transform: uppercase; font-size: 11px; letter-spacing: 1px; margin: 0 0 16px 0;}
-
-/* Hub Grid */
-.hub-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 24px; flex: 1; }
-.action-panel { display: flex; flex-direction: column; gap: 20px; }
-.track-hero { background: linear-gradient(135deg, var(--surface-2), var(--bg)); border: 1px solid var(--line); border-radius: 8px; padding: 24px; min-height: 150px; display: flex; align-items: flex-end; }
-.track-details { display: flex; gap: 32px; width: 100%; }
-.stat-group { display: flex; flex-direction: column; gap: 4px; }
-.stat-group .k { font-size: 11px; color: var(--faint); text-transform: uppercase; font-weight: 600; }
-.stat-group .v { font-size: 18px; font-weight: 700; }
-
-.sim-box { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 24px; text-align: center; }
-.sim-box h3 { margin: 0 0 8px 0; font-size: 18px; }
-.sim-actions { display: flex; justify-content: center; gap: 12px; margin-top: 20px; }
-
-.btn { background: var(--accent); color: #fff; border: none; padding: 10px 20px; border-radius: 6px; font-weight: 700; cursor: pointer; transition: 0.2s;}
-.btn:hover { filter: brightness(1.1); }
-.btn-cancel { background: transparent; color: var(--fg); border: 1px solid var(--line); padding: 10px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; }
-.btn-cancel:hover { background: var(--surface-2); }
-
-/* Schedule Timeline */
-.schedule-panel { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 20px; }
-.timeline { display: flex; flex-direction: column; gap: 0; }
-.timeline-item { display: flex; gap: 16px; padding: 12px 0; position: relative; opacity: 0.5; }
-.timeline-item::before { content: ''; position: absolute; left: 5px; top: 24px; bottom: -12px; width: 2px; background: var(--line); }
-.timeline-item:last-child::before { display: none; }
-.timeline-item.is-done { opacity: 0.8; }
-.timeline-item.is-active { opacity: 1; }
-
-.node { width: 12px; height: 12px; border-radius: 50%; background: var(--surface-2); border: 2px solid var(--line); position: relative; z-index: 2; margin-top: 4px; }
-.is-done .node { background: var(--muted); border-color: var(--muted); }
-.is-active .node { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
-
-.session-name { font-weight: 700; font-size: 14px; }
-.session-status { font-size: 11px; font-weight: 600; margin-top: 4px; text-transform: uppercase; }
-.is-active .session-status { color: var(--accent); }
-
-/* Strategy Grid */
-.strategy-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-.driver-card { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 24px; }
-.driver-header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
-.driver-header .crest { width: 32px; height: 32px; background: var(--surface-2); border-radius: 6px; display: grid; place-items: center; font-weight: 800; font-size: 12px; color: var(--muted); }
-.driver-header .name { font-size: 18px; font-weight: 700; }
-
-.settings-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
-.settings-group label { font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 600; }
-select { background: var(--surface); color: var(--fg); border: 1px solid var(--line); padding: 12px; border-radius: 6px; font-size: 14px; outline: none; cursor: pointer; }
+.driver-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.driver-card { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 18px; }
+.dc-head { font-size: 16px; font-weight: 700; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+.grid-pill { background: var(--surface-2); color: var(--muted); border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 700; }
+.driver-card label { display: block; font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 600; margin-bottom: 6px; }
+select { width: 100%; background: var(--surface); color: var(--fg); border: 1px solid var(--line); padding: 10px; border-radius: 6px; font-size: 13px; outline: none; cursor: pointer; }
 select:focus { border-color: var(--accent); }
+select:disabled { opacity: .6; cursor: not-allowed; }
 
-/* Data Table */
-.data-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-.data-table th { color: var(--faint); text-transform: uppercase; font-size: 11px; text-align: left; padding: 12px 8px; border-bottom: 1px solid var(--line); }
-.data-table td { padding: 12px 8px; border-bottom: 1px solid var(--surface-2); vertical-align: middle; }
+.section { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 24px 0 10px; font-weight: 700; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table th { color: var(--faint); text-transform: uppercase; font-size: 10px; text-align: left; padding: 8px; border-bottom: 1px solid var(--line); }
+.data-table td { padding: 11px 8px; border-bottom: 1px solid var(--surface-2); vertical-align: middle; }
 .data-table th.r, .data-table td.r { text-align: right; }
-.data-table .name { font-weight: 700; }
-.is-player td { background: var(--surface-2); }
-.is-player .name { color: var(--accent); }
-.p-20 { padding: 20px; }
-
-/* Dynamic Tyre Colours */
-.tyre-pill { display: inline-block; width: 24px; height: 24px; line-height: 24px; text-align: center; border-radius: 50%; font-size: 12px; font-weight: 800; color: #000; }
-.tyre-pill.s { background: #ff3b30; color: #fff; }
-.tyre-pill.m { background: #ffcc00; }
-.tyre-pill.h { background: #ffffff; }
-.tyre-pill.i { background: #34c759; color: #fff; }
-.tyre-pill.w { background: #007aff; color: #fff; }
+.name { font-weight: 700; }
+tr.me td { background: var(--accent-soft); }
+.tag { margin-left: 6px; font-size: 9px; text-transform: uppercase; padding: 2px 5px; border-radius: 4px; background: var(--surface-2); color: var(--muted); font-weight: 700; }
+.tag.fl { color: #b07cf0; }
+.status { font-size: 11px; font-weight: 600; }
+.status.dnf { color: var(--bad); }
+.status.finished { color: var(--good); }
+.dnf { margin-left: 6px; font-size: 11px; }
+.p-20 { padding: 20px; text-align: center; }
+.faint { color: var(--faint); }
 </style>
-

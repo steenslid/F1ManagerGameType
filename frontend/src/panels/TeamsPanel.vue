@@ -1,50 +1,66 @@
-﻿<script setup>
+<script setup>
 import { ref, onMounted } from 'vue'
 import { api } from '../api.js'
+import { useGame } from '../useGame.js'
+import { fmtMoney, crestText } from '../format.js'
+
+const { state, takeControl } = useGame()
 
 const teams = ref([])
 const isLoading = ref(true)
+const error = ref(null)
 
-const formatMoney = (val) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val || 0)
+onMounted(load)
 
-onMounted(async () => {
+async function load() {
+  isLoading.value = true
+  error.value = null
   try {
     const res = await api.listTeams()
     teams.value = res.data || []
   } catch (e) {
-    console.error(e)
+    error.value = e.message || String(e)
   } finally {
     isLoading.value = false
   }
-})
+}
+
+async function control(team) {
+  await takeControl(team.id)
+}
+
+function isMine(team) {
+  return state.overview?.playerTeam?.id === team.id
+}
 </script>
 
 <template>
   <div class="card">
-    <div class="card-header">
-      <h2>Constructors Directory</h2>
-    </div>
+    <div class="card-header"><h2>Constructors</h2></div>
 
-    <div v-if="isLoading" class="faint p-20">Loading teams...</div>
+    <div v-if="error" class="error-banner">{{ error }}</div>
+    <div v-if="isLoading" class="faint p-20">Loading teams…</div>
 
     <table v-else class="data-table">
       <thead>
-      <tr>
-        <th>Logo</th>
-        <th>Team Name</th>
-        <th>Principal</th>
-        <th>Engine Supplier</th>
-        <th class="r">Cash Reserves</th>
-      </tr>
+        <tr>
+          <th></th><th>Team</th><th>Country</th>
+          <th class="r">Prestige</th><th class="r">Points</th><th class="r">Cash</th><th class="r"></th>
+        </tr>
       </thead>
       <tbody>
-      <tr v-for="team in teams" :key="team.id">
-        <td><div class="crest">{{ team.name.substring(0, 2).toUpperCase() }}</div></td>
-        <td class="name">{{ team.name }}</td>
-        <td>{{ team.principalName || 'N/A' }}</td>
-        <td>{{ team.engineSupplierName || 'Unknown' }}</td>
-        <td class="r num">{{ formatMoney(team.cashReserves) }}</td>
-      </tr>
+        <tr v-for="team in teams" :key="team.id" :class="{ me: isMine(team) }">
+          <td><div class="crest">{{ crestText(team.name) }}</div></td>
+          <td class="name">{{ team.name }} <span v-if="team.isCustomTeam" class="pill">Custom</span></td>
+          <td class="faint">{{ team.country }}</td>
+          <td class="r num">{{ team.prestige }}</td>
+          <td class="r num">{{ team.seasonPoints }}</td>
+          <td class="r num">{{ fmtMoney(team.finance?.cashReserves) }}</td>
+          <td class="r">
+            <span v-if="isMine(team)" class="pill mine">Your team</span>
+            <button v-else class="btn-small" @click="control(team)">Take control</button>
+          </td>
+        </tr>
       </tbody>
     </table>
   </div>
@@ -53,11 +69,18 @@ onMounted(async () => {
 <style scoped>
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; }
 .card-header h2 { margin: 0 0 16px; font-size: 16px; font-weight: 700; }
+.error-banner { background: var(--accent-soft); border: 1px solid #e1060055; color: #ff7066; padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 12px; }
 .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .data-table th { color: var(--faint); text-transform: uppercase; font-size: 10px; text-align: left; padding: 8px; border-bottom: 1px solid var(--line); }
 .data-table td { padding: 12px 8px; border-bottom: 1px solid var(--surface-2); vertical-align: middle; }
 .data-table th.r, .data-table td.r { text-align: right; }
 .name { font-weight: 700; font-size: 14px; }
-.crest { width: 28px; height: 28px; border-radius: 4px; background: var(--surface-2); display: grid; place-items: center; font-size: 10px; font-weight: 800; color: var(--muted); border: 1px solid var(--line); }
+.crest { width: 28px; height: 28px; border-radius: 6px; background: var(--surface-2); display: grid; place-items: center; font-size: 10px; font-weight: 800; color: var(--muted); border: 1px solid var(--line); }
+tr.me td { background: var(--accent-soft); }
+.pill { background: var(--surface-2); color: var(--muted); padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 700; }
+.pill.mine { background: var(--accent-soft); color: #ff7066; border: 1px solid #e1060055; }
+.btn-small { background: var(--accent); border: none; color: #fff; padding: 7px 12px; border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 12px; }
+.btn-small:hover { filter: brightness(1.1); }
 .p-20 { padding: 20px; text-align: center; }
+.faint { color: var(--faint); }
 </style>
