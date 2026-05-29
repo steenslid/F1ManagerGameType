@@ -1,54 +1,41 @@
 <script setup>
 import { ref } from 'vue'
-import SavesPanel from './panels/SavesPanel.vue'
-import GamePanel from './panels/GamePanel.vue'
-import CalendarPanel from './panels/CalendarPanel.vue'
-import TeamsPanel from './panels/TeamsPanel.vue'
-import SponsorshipsPanel from './panels/SponsorshipsPanel.vue'
-import DriversPanel from './panels/DriversPanel.vue'
-import PracticePanel from './panels/PracticePanel.vue'
-import StrategyPanel from './panels/StrategyPanel.vue'
-import ResultsPanel from './panels/ResultsPanel.vue'
-import MarketPanel from './panels/MarketPanel.vue'
-import OffSeasonPanel from './panels/OffSeasonPanel.vue'
-import ReferencePanel from './panels/ReferencePanel.vue'
+import TestUI from './testui/TestUI.vue'
+import NewUI from './NewUI.vue'
 
-const tabs = [
-  { id: 'saves', label: 'Saves', component: SavesPanel },
-  { id: 'game', label: 'Game', component: GamePanel },
-  { id: 'calendar', label: 'Calendar', component: CalendarPanel },
-  { id: 'teams', label: 'Teams', component: TeamsPanel },
-  { id: 'sponsorships', label: 'Sponsorships', component: SponsorshipsPanel },
-  { id: 'drivers', label: 'Drivers', component: DriversPanel },
-  { id: 'practice', label: 'Practice', component: PracticePanel },
-  { id: 'strategy', label: 'Strategy', component: StrategyPanel },
-  { id: 'results', label: 'Results', component: ResultsPanel },
-  { id: 'market', label: 'Market', component: MarketPanel },
-  { id: 'offseason', label: 'Off-Season', component: OffSeasonPanel },
-  { id: 'reference', label: 'Reference', component: ReferencePanel },
-]
-
-const activeTab = ref('saves')
+// Set default to 'test' so your app boots up exactly how it used to
+const mode = ref('test')
 </script>
 
 <template>
-  <header>
-    <h1>F1 Sim — test UI</h1>
-    <div class="subtitle">Talks to backend at localhost:7777</div>
-  </header>
+  <button
+      class="dev-toggle"
+      @click="mode = mode === 'test' ? 'new' : 'test'"
+  >
+    Switch to {{ mode === 'test' ? 'New UI' : 'Test UI' }}
+  </button>
 
-  <nav class="tabs">
-    <button
-      v-for="t in tabs"
-      :key="t.id"
-      :class="{ active: activeTab === t.id }"
-      @click="activeTab = t.id"
-    >
-      {{ t.label }}
-    </button>
-  </nav>
-
-  <main>
-    <component :is="tabs.find(t => t.id === activeTab).component" />
-  </main>
+  <TestUI v-if="mode === 'test'" />
+  <NewUI v-else />
 </template>
+
+<style>
+/* Global style for the dev toggle button */
+.dev-toggle {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 9999;
+  background: #ff00ff;
+  color: white;
+  border: none;
+  padding: 10px 15px;
+  border-radius: 8px;
+  font-weight: bold;
+  cursor: pointer;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+}
+.dev-toggle:hover { background: #d000d0; }
+</style>
+
+

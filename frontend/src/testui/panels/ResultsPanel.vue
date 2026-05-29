@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { api } from '../api.js'
+import { api } from '../../api.js'
 
 const state = ref(null)
 const currentRace = ref(null)

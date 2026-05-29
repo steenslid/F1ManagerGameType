@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { api } from '../api.js'
+import { api } from '../../api.js'
 
 const saves = ref([])
 const loading = ref(false)

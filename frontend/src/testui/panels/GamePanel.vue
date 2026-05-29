@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { api } from '../api.js'
+import { api } from '../../api.js'
 
 const state = ref(null)
 const actions = ref(null)
