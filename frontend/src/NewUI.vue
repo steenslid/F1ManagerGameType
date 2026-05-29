@@ -21,23 +21,25 @@ const handleAdvance = () => {
 </script>
 
 <template>
-  <SavesPanel
-      v-if="appState === 'saves'"
-      @saveLoaded="handleSaveLoaded"
-  />
+  <div class="new-ui-wrapper">
+    <SavesPanel
+        v-if="appState === 'saves'"
+        @saveLoaded="handleSaveLoaded"
+    />
 
-  <div v-else-if="appState === 'game'">
-    <NavBar v-model:activePanel="activePanel" />
-    <SeasonBar @advance="handleAdvance" />
+    <div v-else-if="appState === 'game'">
+      <NavBar v-model:activePanel="activePanel" />
+      <SeasonBar @advance="handleAdvance" />
 
-    <main class="wrap">
-      <DashboardPanel v-if="activePanel === 'Dashboard'" />
+      <main class="wrap">
+        <DashboardPanel v-if="activePanel === 'Dashboard'" />
 
-      <div v-else class="card" style="text-align: center; padding: 40px;">
-        <h2>{{ activePanel }}</h2>
-        <p class="faint">Component not linked yet.</p>
-      </div>
-    </main>
+        <div v-else class="card" style="text-align: center; padding: 40px;">
+          <h2>{{ activePanel }}</h2>
+          <p class="faint">Component not linked yet.</p>
+        </div>
+      </main>
+    </div>
   </div>
 </template>
 

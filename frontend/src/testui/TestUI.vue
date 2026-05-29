@@ -32,23 +32,25 @@ const activeTab = ref('saves')
 </script>
 
 <template>
-  <header>
-    <h1>F1 Sim — test UI</h1>
-    <div class="subtitle">Talks to backend at localhost:7777</div>
-  </header>
+  <div class="test-ui-wrapper">
+    <header>
+      <h1>F1 Sim — test UI</h1>
+      <div class="subtitle">Talks to backend at localhost:7777</div>
+    </header>
 
-  <nav class="tabs">
-    <button
-      v-for="t in tabs"
-      :key="t.id"
-      :class="{ active: activeTab === t.id }"
-      @click="activeTab = t.id"
-    >
-      {{ t.label }}
-    </button>
-  </nav>
+    <nav class="tabs">
+      <button
+        v-for="t in tabs"
+        :key="t.id"
+        :class="{ active: activeTab === t.id }"
+        @click="activeTab = t.id"
+      >
+        {{ t.label }}
+      </button>
+    </nav>
 
-  <main>
-    <component :is="tabs.find(t => t.id === activeTab).component" />
-  </main>
+    <main>
+      <component :is="tabs.find(t => t.id === activeTab).component" />
+    </main>
+</div>
 </template>
