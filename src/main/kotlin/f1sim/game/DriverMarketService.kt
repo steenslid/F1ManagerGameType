@@ -503,6 +503,9 @@ class DriverMarketService(private val db: Database) {
         val seasonPoints: Int,
         val cashReserves: Long,
         val existingDriverSalary: Long,
+        val aiAggression: Double,
+        val aiAmbition: Double,
+        val aiFrugality: Double,
         var openSeats: Int,
         var committedSalary: Long = 0,
     )
@@ -567,6 +570,7 @@ class DriverMarketService(private val db: Database) {
         return conn.prepareStatement(
             """
             SELECT t.id, t.name, t.prestige, t.season_points, t.cash_reserves,
+                   t.ai_aggression, t.ai_ambition, t.ai_frugality,
                    GREATEST(0, $SEATS_PER_TEAM - COALESCE(driver_count.cnt, 0)) AS open_seats,
                    COALESCE(driver_count.sal, 0) AS existing_driver_salary
               FROM teams t
@@ -594,6 +598,9 @@ class DriverMarketService(private val db: Database) {
                                 seasonPoints = rs.getInt("season_points"),
                                 cashReserves = rs.getLong("cash_reserves"),
                                 existingDriverSalary = rs.getLong("existing_driver_salary"),
+                                aiAggression = rs.getDouble("ai_aggression"),
+                                aiAmbition = rs.getDouble("ai_ambition"),
+                                aiFrugality = rs.getDouble("ai_frugality"),
                                 openSeats = rs.getInt("open_seats"),
                             )
                         )
@@ -684,12 +691,14 @@ class DriverMarketService(private val db: Database) {
     /**
      * Team's preference score for a candidate driver.
      *
-     *   skill   : pace, the dominant term
+     *   skill   : pace, the dominant term. Its weight scales with the team's
+     *             `ai_ambition` — ambitious teams chase raw pace harder.
      *   ageOpt  : symmetric penalty around 27 (peak racing years)
      *   morale  : slight bonus for happy drivers
      *   noise   : RNG spice for variety; magnitude tuned to be ~10% of skill
      *   counter : bump applied when this AI team is the closest rival to a
-     *             player offer for this driver. Makes head-to-head feel
+     *             player offer for this driver, scaled by `ai_aggression`
+     *             (aggressive teams counter harder). Makes head-to-head feel
      *             competitive without overpowering pure skill scouting.
      */
     private fun teamScore(
@@ -699,10 +708,18 @@ class DriverMarketService(private val db: Database) {
         isCounterBidTarget: Boolean = false,
     ): Double {
         val skill = (agent.statPace - 50).toDouble()
+        // Ambition tilts the skill weight: 0.5 ambition is neutral (0.7),
+        // a maximally ambitious team weights pace at 0.7 + AMBITION_SKILL_SWING,
+        // a placid one at 0.7 - AMBITION_SKILL_SWING.
+        val skillWeight = SKILL_WEIGHT_BASE + AMBITION_SKILL_SWING * (team.aiAmbition - 0.5) * 2.0
         val ageOpt = -kotlin.math.abs(agent.currentAge - 27).toDouble()
         val morale = (agent.morale - 50).toDouble()
         val noise = rng.nextDouble() * 10.0
-        val counter = if (isCounterBidTarget) COUNTER_BID_BONUS else 0.0
+        // Aggression scales the counter-bid: 0.5 aggression leaves the base
+        // bonus unchanged, 1.0 = 1.5x, 0.0 = 0.5x.
+        val counter = if (isCounterBidTarget) {
+            COUNTER_BID_BONUS * (0.5 + team.aiAggression)
+        } else 0.0
         // Team-side loyalty: a team gets a bump for keeping a driver it
         // just released. Weighted by the driver's trait_loyalty — keeping
         // a 0.9-loyalty veteran feels valuable (continuity, sponsor fit);
@@ -710,7 +727,7 @@ class DriverMarketService(private val db: Database) {
         val loyalty = if (agent.previousTeamId == team.id) {
             TEAM_LOYALTY_BONUS * agent.traitLoyalty
         } else 0.0
-        return skill * 0.7 + ageOpt * 0.5 + morale * 0.2 + noise + counter + loyalty
+        return skill * skillWeight + ageOpt * 0.5 + morale * 0.2 + noise + counter + loyalty
     }
 
     /**
@@ -779,7 +796,12 @@ class DriverMarketService(private val db: Database) {
                 round.toLong()
         )
         val noiseFactor = 1.0 - SALARY_NOISE_PCT + noiseRng.nextDouble() * 2.0 * SALARY_NOISE_PCT
-        return (base * prestigeFactor * valueModifier * ageFactor * noiseFactor).toLong()
+        // Frugality discounts the quote: a maximally frugal team (1.0) pays
+        // 1 - FRUGALITY_SWING of the going rate, a free-spending one (0.0)
+        // pays 1 + FRUGALITY_SWING; 0.5 is neutral. Frugal teams also clear
+        // the affordability gate more easily, so thrift compounds.
+        val frugalityFactor = 1.0 - FRUGALITY_SWING * (team.aiFrugality - 0.5) * 2.0
+        return (base * prestigeFactor * valueModifier * ageFactor * noiseFactor * frugalityFactor).toLong()
     }
 
     /**
@@ -1032,5 +1054,27 @@ class DriverMarketService(private val db: Database) {
          * exempt. Tuning knob.
          */
         const val AI_SALARY_CASH_FRACTION = 0.60
+
+        /**
+         * Neutral weight on the pace/skill term in [teamScore] (the value used
+         * when a team's `ai_ambition` is exactly 0.5).
+         */
+        const val SKILL_WEIGHT_BASE = 0.7
+
+        /**
+         * How far `ai_ambition` can tilt the skill weight in [teamScore].
+         * At ambition 1.0 the weight is SKILL_WEIGHT_BASE + this; at 0.0 it's
+         * SKILL_WEIGHT_BASE - this. 0.2 keeps even a placid team meaningfully
+         * pace-driven while letting an ambitious one clearly favour stars.
+         */
+        const val AMBITION_SKILL_SWING = 0.2
+
+        /**
+         * Half-width of the `ai_frugality` salary swing in [computeAiSalary].
+         * A maximally frugal team quotes (1 - this) of the going rate, a
+         * free-spending one (1 + this); 0.5 frugality is neutral. 0.15 is a
+         * noticeable thrift edge without distorting the pace brackets.
+         */
+        const val FRUGALITY_SWING = 0.15
     }
 }

@@ -48,10 +48,17 @@ the user's repo should now contain all of them:
    reserves, so a cash-poor team can be priced out (and leave its own seats
    empty). `DriverMarketService` only; no schema change; player offers stay
    ungated.
+11. `ai-personality` — AI market scoring now reads team personality:
+   `ai_ambition` tilts the skill/pace weight in `teamScore`
+   (`SKILL_WEIGHT_BASE 0.7 ± AMBITION_SKILL_SWING 0.2`), `ai_frugality`
+   discounts `computeAiSalary` quotes (`± FRUGALITY_SWING 0.15`), and
+   `ai_aggression` scales the counter-bid bump (`COUNTER_BID_BONUS × (0.5 +
+   aggression)`). `DriverMarketService` only; no schema change; no new RNG
+   draws (determinism unchanged, values shift).
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
-recreate is needed — patches 2–10 are all code-only. Schema-per-save means no
+recreate is needed — patches 2–11 are all code-only. Schema-per-save means no
 migrations: a schema edit requires drop + recreate of test saves.
 
 **Files touched this chain** (latest version of each lives in the repo after
@@ -65,11 +72,13 @@ applying all zips):
 
 **Good next chunks** (small, backend-only unless noted; see "Known issues"
 and "Left to build" for full context):
-- **AI personality in market** — `ai_aggression` / `ai_ambition` /
-  `ai_frugality` exist on teams but market scoring ignores them.
-- **Frontend (needs the Vue files, not in recent zips)** — surface
-  `academy_investment` in TeamsPanel; distinguish sponsor renewal vs revenue
-  events in the off-season events panel.
+- **Richer counter-bidding** — `ai_aggression` now scales the counter-bid
+  bonus, but only the single closest-prestige rival counters. Natural next
+  step: a second-closest rival also bumps (half-strength), or the bump scales
+  with how aggressive the player's offer is. `DriverMarketService` only.
+- **Frontend (needs the Vue files)** — surface `academy_investment` in
+  TeamsPanel; distinguish sponsor renewal vs revenue events in the off-season
+  events panel.
 
 **To resume:** pick a chunk, copy the relevant current file(s) from the repo
 into a fresh work dir, make the edit, update this handoff block + the
@@ -396,16 +405,19 @@ preservation. No client-side mirror of "loaded save" — query the backend.
 
 ## Known issues / shortcuts
 
-- **Driver market doesn't use AI personality.** `ai_aggression`,
-  `ai_ambition`, `ai_frugality` exist on teams but the v1 market scoring
-  ignores them. Frugal teams should low-ball offers; ambitious teams
-  should overpay for top talent. Tuning knob for later.
-- **AI counter-bidding is minimal.** The closest-prestige AI team to the
-  player gets a +15 score bump on any driver the player has offered for
-  this round. That flips ~half the close head-to-heads. Beyond this one
-  team, AI doesn't react to the player at all — and frugality / ambition
-  still aren't consulted. Tuning levers: `COUNTER_BID_BONUS` size, and
-  whether the second-closest rival should also get a (smaller) bump.
+- **AI personality now drives market scoring (partially).** `ai_ambition`
+  tilts the skill/pace weight in `teamScore` (`SKILL_WEIGHT_BASE 0.7 ±
+  AMBITION_SKILL_SWING 0.2`), `ai_frugality` discounts `computeAiSalary`
+  (`± FRUGALITY_SWING 0.15`, and thrift compounds via the affordability
+  gate), and `ai_aggression` scales the counter-bid bump. `ai_loyalty` and
+  `ai_development_focus` are still unused in the market. None add RNG draws,
+  so determinism is preserved (only the score/salary *values* shift).
+- **AI counter-bidding is shallow.** Only the single closest-prestige AI team
+  to the player counters, with bonus = `COUNTER_BID_BONUS (15) × (0.5 +
+  ai_aggression)`. That flips ~half the close head-to-heads and now varies by
+  how aggressive the rival is. Beyond that one team, AI doesn't react to the
+  player. Next levers: a second-closest rival bumping at half strength, or
+  scaling the bump by how aggressive the player's own offer is.
 - **AI signings are gated by cash; player offers aren't.** AI teams now
   consult `cash_reserves`: a team won't let total racing-driver salaries
   (existing roster + this market's signings + the new salary) exceed
