@@ -45,13 +45,13 @@ const step = computed(() => {
 
 // Only the player's own drivers are editable here.
 const myPracticeEntries = computed(() =>
-  (practice.value?.entries || []).filter((e) => e.teamId === myTeamId.value)
+    (practice.value?.entries || []).filter((e) => e.teamId === myTeamId.value)
 )
 const myStrategyEntries = computed(() =>
-  (strategy.value?.entries || []).filter((e) => e.teamId === myTeamId.value)
+    (strategy.value?.entries || []).filter((e) => e.teamId === myTeamId.value)
 )
 const sortedResults = computed(() =>
-  [...results.value].sort((a, b) => (a.finishingPosition ?? 999) - (b.finishingPosition ?? 999))
+    [...results.value].sort((a, b) => (a.finishingPosition ?? 999) - (b.finishingPosition ?? 999))
 )
 
 async function loadForStep() {
@@ -128,7 +128,6 @@ function tyreClass(status) { return '' }
 
     <div v-if="error" class="error-banner">{{ error }}</div>
 
-    <!-- Not in a race weekend -->
     <div v-if="step === 'none'" class="empty-state">
       <div class="big">No active session</div>
       <p class="faint">It's currently <b>{{ phaseLabel(phase) }}</b>. Use Advance to move toward the next race weekend.</p>
@@ -136,7 +135,6 @@ function tyreClass(status) { return '' }
 
     <div v-else-if="loading" class="faint p-20">Loading session…</div>
 
-    <!-- PRACTICE: focus -->
     <div v-else-if="step === 'practice'">
       <p class="hint faint">Set a practice focus for each of your drivers. <b>Setup</b> grants a small qualifying/pace boost; the others are placeholders for now.</p>
       <div v-if="!myTeamId" class="faint p-20">Select a team first to set focus.</div>
@@ -153,7 +151,6 @@ function tyreClass(status) { return '' }
       </div>
     </div>
 
-    <!-- QUALIFYING: strategy -->
     <div v-else-if="step === 'strategy'">
       <p class="hint faint">Pick a race strategy for each of your drivers. Grid positions appear once qualifying has been simulated.</p>
       <div v-if="!myTeamId" class="faint p-20">Select a team first to set strategy.</div>
@@ -176,23 +173,29 @@ function tyreClass(status) { return '' }
       <table class="data-table">
         <thead><tr><th class="r">Grid</th><th>Driver</th><th>Team</th><th>Strategy</th></tr></thead>
         <tbody>
-          <tr v-for="e in strategy?.entries || []" :key="e.driverId" :class="{ me: e.teamId === myTeamId }">
-            <td class="r num">{{ e.gridPosition || '—' }}</td>
-            <td class="name">{{ e.driverName }}</td>
-            <td class="faint">{{ e.teamName }}</td>
-            <td class="faint">{{ e.archetype || '—' }}</td>
-          </tr>
+        <tr v-for="e in strategy?.entries || []" :key="e.driverId" :class="{ me: e.teamId === myTeamId }">
+          <td class="r num">{{ e.gridPosition || '—' }}</td>
+          <td class="name">{{ e.driverName }}</td>
+          <td class="faint">{{ e.teamName }}</td>
+          <td class="faint">{{ e.archetype || '—' }}</td>
+        </tr>
         </tbody>
       </table>
     </div>
 
-    <!-- RACE / POST_RACE: results -->
     <div v-else-if="step === 'results'">
-      <div v-if="sprintResults.length">
-        <h3 class="section">Sprint result</h3>
-        <table class="data-table">
-          <thead><tr><th class="r">Pos</th><th>Driver</th><th>Team</th><th class="r">Pts</th><th>Status</th></tr></thead>
-          <tbody>
+
+      <div v-if="phase === 'SPRINT'" class="empty-state">
+        <div class="big">The Sprint has run</div>
+        <p class="faint">Click <b>{{ state.advancing ? 'Advancing…' : advanceLabel }}</b> to reveal the sprint results.</p>
+      </div>
+
+      <div v-else>
+        <div v-if="sprintResults.length">
+          <h3 class="section">Sprint result</h3>
+          <table class="data-table">
+            <thead><tr><th class="r">Pos</th><th>Driver</th><th>Team</th><th class="r">Pts</th><th>Status</th></tr></thead>
+            <tbody>
             <tr v-for="r in [...sprintResults].sort((a,b)=>(a.finishingPosition??999)-(b.finishingPosition??999))" :key="r.driverId" :class="{ me: r.teamId === myTeamId }">
               <td class="r num">{{ r.finishingPosition || '—' }}</td>
               <td class="name">{{ r.driverName }}</td>
@@ -200,26 +203,34 @@ function tyreClass(status) { return '' }
               <td class="r num">{{ r.points }}</td>
               <td><span class="status" :class="r.status.toLowerCase()">{{ r.status }}</span></td>
             </tr>
-          </tbody>
-        </table>
-      </div>
+            </tbody>
+          </table>
+        </div>
 
-      <h3 class="section">Race result</h3>
-      <table class="data-table" v-if="sortedResults.length">
-        <thead><tr><th class="r">Pos</th><th>Driver</th><th>Team</th><th class="r">Grid</th><th class="r">Pts</th><th>Status</th></tr></thead>
-        <tbody>
-          <tr v-for="r in sortedResults" :key="r.driverId" :class="{ me: r.teamId === myTeamId }">
-            <td class="r num">{{ r.finishingPosition || '—' }}</td>
-            <td class="name">{{ r.driverName }}<span v-if="r.pole" class="tag">Pole</span><span v-if="r.fastestLap" class="tag fl">FL</span></td>
-            <td class="faint">{{ r.teamName }}</td>
-            <td class="r num">{{ r.gridPosition || '—' }}</td>
-            <td class="r num">{{ r.points }}</td>
-            <td><span class="status" :class="r.status.toLowerCase()">{{ r.status }}</span>
-              <span v-if="r.dnfCause" class="faint dnf">{{ r.dnfCause }}</span></td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="faint p-20">No race result yet — advance through the {{ phaseLabel(phase) }} phase to run the simulation.</div>
+        <div v-if="phase === 'RACE'" class="empty-state" :style="sprintResults.length ? 'margin-top: 40px;' : ''">
+          <div class="big">The Grand Prix has run</div>
+          <p class="faint">Click <b>{{ state.advancing ? 'Advancing…' : advanceLabel }}</b> to reveal the race results.</p>
+        </div>
+
+        <div v-else-if="phase === 'POST_RACE'">
+          <h3 class="section">Race result</h3>
+          <table class="data-table" v-if="sortedResults.length">
+            <thead><tr><th class="r">Pos</th><th>Driver</th><th>Team</th><th class="r">Grid</th><th class="r">Pts</th><th>Status</th></tr></thead>
+            <tbody>
+            <tr v-for="r in sortedResults" :key="r.driverId" :class="{ me: r.teamId === myTeamId }">
+              <td class="r num">{{ r.finishingPosition || '—' }}</td>
+              <td class="name">{{ r.driverName }}<span v-if="r.pole" class="tag">Pole</span><span v-if="r.fastestLap" class="tag fl">FL</span></td>
+              <td class="faint">{{ r.teamName }}</td>
+              <td class="r num">{{ r.gridPosition || '—' }}</td>
+              <td class="r num">{{ r.points }}</td>
+              <td><span class="status" :class="r.status.toLowerCase()">{{ r.status }}</span>
+                <span v-if="r.dnfCause" class="faint dnf">{{ r.dnfCause }}</span></td>
+            </tr>
+            </tbody>
+          </table>
+          <div v-else class="faint p-20">No race result yet — advance through the {{ phaseLabel(phase) }} phase to run the simulation.</div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -266,3 +277,4 @@ tr.me td { background: var(--accent-soft); }
 .p-20 { padding: 20px; text-align: center; }
 .faint { color: var(--faint); }
 </style>
+
