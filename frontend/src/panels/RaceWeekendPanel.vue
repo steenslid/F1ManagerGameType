@@ -5,45 +5,50 @@ import { api } from '../api.js'
 const activeTab = ref('hub') // 'hub', 'strategy', 'results'
 const isLoading = ref(true)
 
-// Mock/State Data
+// Empty refs ready for actual API data
 const track = ref({})
-const currentPhase = ref('PRACTICE_1')
-const schedule = ref([
-  { id: 'PRACTICE_1', name: 'Free Practice 1', status: 'COMPLETED' },
-  { id: 'PRACTICE_2', name: 'Free Practice 2', status: 'COMPLETED' },
-  { id: 'PRACTICE_3', name: 'Free Practice 3', status: 'COMPLETED' },
-  { id: 'QUALIFYING', name: 'Qualifying', status: 'ACTIVE' },
-  { id: 'RACE', name: 'Race', status: 'PENDING' }
-])
-
-const driversStrategy = ref([
-  { id: 1, name: 'Driver 1', tyre: 'Soft', pace: 'Push' },
-  { id: 2, name: 'Driver 2', tyre: 'Medium', pace: 'Balanced' }
-])
-
+const currentPhase = ref('')
+const schedule = ref([])
+const driversStrategy = ref([])
 const recentResults = ref([])
+const playerTeamName = ref('')
 
 onMounted(async () => {
   isLoading.value = true
   try {
-    // Replace with your actual API endpoints
-    const [raceRes, stateRes, resultsRes] = await Promise.all([
-      api.getCurrentRace(),
-      api.getGameState(),
-      // api.getRaceResults() // Uncomment when ready
-      Promise.resolve({ data: [] }) // Mocking results for now
+    // Fetch all weekend context in parallel.
+    // We use .catch() to prevent one missing endpoint from breaking the whole page while you build them.
+    const [raceRes, stateRes, weekendRes, resultsRes, teamRes] = await Promise.all([
+      api.getCurrentRace().catch(() => ({ data: {} })),
+      api.getGameState().catch(() => ({ data: {} })),
+      api.getRaceWeekend().catch(() => ({ data: [] })), // Expected to hit RaceWeekendRoutes.kt
+      api.getRaceResults().catch(() => ({ data: [] })), // Expected to hit RaceResultsRoutes.kt
+      api.listTeams().catch(() => ({ data: [] }))
     ])
 
-    track.value = raceRes.data || { name: 'Autodromo Nazionale Monza', location: 'Monza, Italy', laps: 53 }
-    currentPhase.value = stateRes.data?.phase || 'QUALIFYING'
+    track.value = raceRes.data || {}
+    currentPhase.value = stateRes.data?.phase || 'UNKNOWN'
+    schedule.value = weekendRes.data || []
+    recentResults.value = resultsRes.data || []
 
-    // Mock Results Population
-    recentResults.value = [
-      { pos: 1, driver: 'Max Verstappen', team: 'Red Bull Racing', gap: 'Leader', tyre: 'S' },
-      { pos: 2, driver: 'Charles Leclerc', team: 'Scuderia Ferrari', gap: '+0.142s', tyre: 'S' },
-      { pos: 3, driver: 'Your Driver 1', team: 'Scuderia Rossa', gap: '+0.311s', tyre: 'S' },
-      { pos: 4, driver: 'Lando Norris', team: 'McLaren', gap: '+0.450s', tyre: 'M' }
-    ]
+    // Dynamically build the Strategy UI for the player's actual drivers
+    const playerTeamId = stateRes.data?.playerTeamId
+    if (playerTeamId && teamRes.data) {
+      const myTeam = teamRes.data.find(t => t.id === playerTeamId)
+      if (myTeam) {
+        playerTeamName.value = myTeam.name
+
+        // Assuming drivers are nested in the team response, or fetch them via api.listDrivers({teamId})
+        const myDrivers = myTeam.drivers || []
+
+        driversStrategy.value = myDrivers.map(driver => ({
+          driverId: driver.id,
+          name: driver.name,
+          tyre: 'Soft', // Default, ideally fetched from driver.currentTyre
+          pace: 'Balanced' // Default, ideally fetched from driver.currentPace
+        }))
+      }
+    }
 
   } catch (e) {
     console.error("Failed to load race weekend", e)
@@ -53,10 +58,22 @@ onMounted(async () => {
 })
 
 const simulateSession = async () => {
-  console.log("Simulating session with strategy:", driversStrategy.value)
-  // await api.post('/api/game/advance')
-  // Fetch new state and switch to results tab
-  activeTab.value = 'results'
+  try {
+    console.log("Submitting strategy payload:", driversStrategy.value)
+    // 1. Submit the strategies to the backend first
+    // await api.submitStrategy(driversStrategy.value)
+
+    // 2. Trigger the state machine to simulate the session
+    // await api.advanceGame()
+
+    // 3. Fetch the fresh results and jump to the results tab
+    const resultsRes = await api.getRaceResults()
+    recentResults.value = resultsRes.data || []
+    activeTab.value = 'results'
+
+  } catch (e) {
+    console.error("Failed to simulate session", e)
+  }
 }
 </script>
 
@@ -65,8 +82,8 @@ const simulateSession = async () => {
     <!-- INTERNAL HEADER & TABS -->
     <div class="card-header">
       <div class="header-titles">
-        <h2>{{ track.name || 'Race Weekend' }}</h2>
-        <span class="faint loc">{{ track.location }}</span>
+        <h2>{{ track.name || 'Awaiting Calendar' }}</h2>
+        <span class="faint loc">{{ track.location || 'Unknown Location' }}</span>
       </div>
 
       <div class="tabs">
@@ -80,27 +97,26 @@ const simulateSession = async () => {
 
     <!-- TAB 1: WEEKEND HUB -->
     <div v-else-if="activeTab === 'hub'" class="hub-grid">
-      <!-- Left: Track Info & Simulate Action -->
       <div class="action-panel">
         <div class="track-hero">
           <div class="track-details">
             <div class="stat-group">
               <span class="k">Laps</span>
-              <span class="v num">{{ track.laps || 50 }}</span>
+              <span class="v num">{{ track.laps || '--' }}</span>
             </div>
             <div class="stat-group">
               <span class="k">Track Temp</span>
-              <span class="v num">31°C</span>
+              <span class="v num">{{ track.trackTemp || '--' }}</span>
             </div>
             <div class="stat-group">
               <span class="k">Weather</span>
-              <span class="v">Partly Cloudy</span>
+              <span class="v">{{ track.weather || '--' }}</span>
             </div>
           </div>
         </div>
 
         <div class="sim-box">
-          <h3>Ready for {{ schedule.find(s => s.status === 'ACTIVE')?.name || 'Next Session' }}</h3>
+          <h3>Current Phase: {{ currentPhase }}</h3>
           <p class="faint">Ensure your strategy is set before heading out on track.</p>
           <div class="sim-actions">
             <button class="btn-cancel" @click="activeTab = 'strategy'">Review Strategy</button>
@@ -109,7 +125,6 @@ const simulateSession = async () => {
         </div>
       </div>
 
-      <!-- Right: Weekend Schedule Timeline -->
       <div class="schedule-panel">
         <h3 class="muted uppercase">Weekend Schedule</h3>
         <div class="timeline">
@@ -125,15 +140,16 @@ const simulateSession = async () => {
               <div class="session-status">{{ session.status }}</div>
             </div>
           </div>
+          <div v-if="!schedule.length" class="faint">Schedule data not available.</div>
         </div>
       </div>
     </div>
 
     <!-- TAB 2: STRATEGY & SETUP -->
     <div v-else-if="activeTab === 'strategy'" class="strategy-grid">
-      <div class="driver-card" v-for="driver in driversStrategy" :key="driver.id">
+      <div class="driver-card" v-for="driver in driversStrategy" :key="driver.driverId">
         <div class="driver-header">
-          <div class="crest">{{ driver.name.substring(0,2).toUpperCase() }}</div>
+          <div class="crest">{{ driver.name ? driver.name.substring(0,2).toUpperCase() : 'DR' }}</div>
           <div class="name">{{ driver.name }}</div>
         </div>
 
@@ -158,6 +174,9 @@ const simulateSession = async () => {
           </select>
         </div>
       </div>
+      <div v-if="!driversStrategy.length" class="faint p-20" style="grid-column: span 2; text-align: center;">
+        No drivers currently contracted to your team.
+      </div>
     </div>
 
     <!-- TAB 3: SESSION RESULTS -->
@@ -173,12 +192,17 @@ const simulateSession = async () => {
         </tr>
         </thead>
         <tbody>
-        <tr v-for="res in recentResults" :key="res.driver" :class="{ 'is-player': res.team === 'Scuderia Rossa' }">
-          <td class="r num">{{ res.pos }}</td>
-          <td class="name">{{ res.driver }}</td>
-          <td class="faint">{{ res.team }}</td>
-          <td class="r num">{{ res.gap }}</td>
-          <td class="text-center"><span class="tyre-pill" :class="res.tyre.toLowerCase()">{{ res.tyre }}</span></td>
+        <tr v-for="res in recentResults" :key="res.driverId || res.driver" :class="{ 'is-player': res.teamName === playerTeamName }">
+          <td class="r num">{{ res.position || res.pos }}</td>
+          <td class="name">{{ res.driverName || res.driver }}</td>
+          <td class="faint">{{ res.teamName || res.team }}</td>
+          <td class="r num">{{ res.gap || res.time || '--' }}</td>
+          <td class="text-center">
+              <span v-if="res.tyre" class="tyre-pill" :class="(res.tyre || '').toLowerCase().charAt(0)">
+                {{ (res.tyre || '').charAt(0).toUpperCase() }}
+              </span>
+            <span v-else>--</span>
+          </td>
         </tr>
         <tr v-if="!recentResults.length">
           <td colspan="5" class="faint text-center p-20">No results available for this session yet.</td>
@@ -222,7 +246,7 @@ const simulateSession = async () => {
 .sim-box h3 { margin: 0 0 8px 0; font-size: 18px; }
 .sim-actions { display: flex; justify-content: center; gap: 12px; margin-top: 20px; }
 
-.btn { background: var(--accent); color: #fff; border: none; padding: 10px 20px; border-radius: 6px; font-weight: 700; cursor: pointer; }
+.btn { background: var(--accent); color: #fff; border: none; padding: 10px 20px; border-radius: 6px; font-weight: 700; cursor: pointer; transition: 0.2s;}
 .btn:hover { filter: brightness(1.1); }
 .btn-cancel { background: transparent; color: var(--fg); border: 1px solid var(--line); padding: 10px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; }
 .btn-cancel:hover { background: var(--surface-2); }
@@ -264,7 +288,9 @@ select:focus { border-color: var(--accent); }
 .data-table .name { font-weight: 700; }
 .is-player td { background: var(--surface-2); }
 .is-player .name { color: var(--accent); }
+.p-20 { padding: 20px; }
 
+/* Dynamic Tyre Colours */
 .tyre-pill { display: inline-block; width: 24px; height: 24px; line-height: 24px; text-align: center; border-radius: 50%; font-size: 12px; font-weight: 800; color: #000; }
 .tyre-pill.s { background: #ff3b30; color: #fff; }
 .tyre-pill.m { background: #ffcc00; }
@@ -272,3 +298,4 @@ select:focus { border-color: var(--accent); }
 .tyre-pill.i { background: #34c759; color: #fff; }
 .tyre-pill.w { background: #007aff; color: #fff; }
 </style>
+
