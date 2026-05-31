@@ -97,6 +97,15 @@ the user's repo should now contain all of them:
    F1 race driver can NOT be poached mid-season (that's the off-season market's
    job — the NEXT planned slice: negotiate with ANY 18+ driver including those
    under contract at rival F1 teams).
+17. `car-performance` (R&D slice A) — the car now matters. SCHEMA CHANGE
+   (`teams.car_performance INT DEFAULT 50`, 0–100 CHECK) + seed derivation
+   (F1 cars spread by prestige in `computeDerivedSeedValues`: prestige 70→~58,
+   95→~82). The qualifying, race and sprint sims now fold a car term into pace
+   via `GameService.carTerm` (`(car_performance - 65) × 0.4`, baseline cancels
+   in sorting) — RaceSim stays pure. `car_performance` exposed on `TeamDto` and
+   shown on the team-select cards + constructors table. Replaces the long-
+   standing placeholder where car quality had ZERO effect on results. No R&D
+   yet — the car is static this slice; developing it is slice B.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further

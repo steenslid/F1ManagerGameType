@@ -455,6 +455,20 @@ class SeedLoader {
         ).use { stmt -> stmt.executeUpdate() }
         log.info("  derived: base_operating_cost for {} teams", teamUpdates)
 
+        // teams.car_performance — spread F1 cars by prestige so the grid has a
+        // real pecking order before any R&D. prestige 70 -> ~58, 95 -> ~82.
+        // Only fill the default (50) so a hand-tuned seed value is respected.
+        val carUpdates = conn.prepareStatement(
+            """
+            UPDATE teams
+               SET car_performance =
+                   LEAST(100, GREATEST(0, ROUND(58 + (prestige - 70) * 0.96)::INT))
+             WHERE series = 'F1'
+               AND car_performance = 50
+            """.trimIndent()
+        ).use { stmt -> stmt.executeUpdate() }
+        log.info("  derived: car_performance for {} teams", carUpdates)
+
         // drivers.current_salary — only fill where zero (don't clobber seeded values)
         val driverUpdates = conn.prepareStatement(
             """

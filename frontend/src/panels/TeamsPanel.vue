@@ -42,7 +42,7 @@ function isMine(team) {
       <thead>
         <tr>
           <th></th><th>Team</th><th>Country</th>
-          <th class="r">Prestige</th><th class="r">Points</th><th class="r">Cash</th><th class="r"></th>
+          <th class="r">Prestige</th><th class="r">Car</th><th class="r">Points</th><th class="r">Cash</th><th class="r"></th>
         </tr>
       </thead>
       <tbody>
@@ -51,6 +51,7 @@ function isMine(team) {
           <td class="name">{{ team.name }} <span v-if="team.isCustomTeam" class="pill">Custom</span></td>
           <td class="faint">{{ team.country }}</td>
           <td class="r num">{{ team.prestige }}</td>
+          <td class="r num">{{ team.carPerformance }}</td>
           <td class="r num">{{ team.seasonPoints }}</td>
           <td class="r num">{{ fmtMoney(team.finance?.cashReserves) }}</td>
           <td class="r"><span v-if="isMine(team)" class="pill mine">Your team</span></td>

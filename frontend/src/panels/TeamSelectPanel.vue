@@ -96,8 +96,8 @@ async function confirm() {
 
         <div class="tc-stats">
           <div><span class="k">Prestige</span><span class="v num">{{ t.prestige }}</span></div>
+          <div><span class="k">Car</span><span class="v num">{{ t.carPerformance }}</span></div>
           <div><span class="k">Cash</span><span class="v num">{{ fmtMoney(t.finance?.cashReserves) }}</span></div>
-          <div><span class="k">Pit crew</span><span class="v num">{{ t.pitCrewRating }}</span></div>
         </div>
 
         <div class="tc-drivers">

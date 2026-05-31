@@ -481,10 +481,12 @@ class GameService(
             """
             SELECT rr.driver_id, rr.team_id, rr.grid_position,
                    d.stat_pace, d.stat_consistency,
+                   t.car_performance,
                    pf.focus AS focus,
                    rs.archetype AS strategy_archetype
               FROM race_results rr
               JOIN drivers d ON d.id = rr.driver_id
+              JOIN teams t ON t.id = rr.team_id
               LEFT JOIN practice_focus pf
                 ON pf.driver_id = rr.driver_id AND pf.race_id = rr.race_id
               LEFT JOIN race_strategy rs
@@ -499,11 +501,12 @@ class GameService(
                     while (rs.next()) {
                         val basePace = rs.getInt("stat_pace").toDouble()
                         val focus = rs.getString("focus")
-                        val effectivePace = if (focus == "SETUP") {
+                        val withSetup = if (focus == "SETUP") {
                             basePace * setupBonusMultiplier
                         } else {
                             basePace
                         }
+                        val effectivePace = withSetup + carTerm(rs.getInt("car_performance"))
                         add(
                             RaceSim.RaceEntrant(
                                 driverId = rs.getObject("driver_id", UUID::class.java),
@@ -640,9 +643,11 @@ class GameService(
         val entrants = conn.prepareStatement(
             """
             SELECT sr.driver_id, sr.team_id, sr.grid_position,
-                   d.stat_pace, d.stat_consistency
+                   d.stat_pace, d.stat_consistency,
+                   t.car_performance
               FROM sprint_results sr
               JOIN drivers d ON d.id = sr.driver_id
+              JOIN teams t ON t.id = sr.team_id
              WHERE sr.race_id = ?
                AND sr.status = 'QUALIFIED'
             """.trimIndent()
@@ -656,7 +661,8 @@ class GameService(
                                 driverId = rs.getObject("driver_id", UUID::class.java),
                                 teamId = rs.getString("team_id"),
                                 gridPosition = rs.getInt("grid_position"),
-                                statPace = rs.getInt("stat_pace").toDouble(),
+                                statPace = rs.getInt("stat_pace").toDouble() +
+                                    carTerm(rs.getInt("car_performance")),
                                 statConsistency = rs.getInt("stat_consistency"),
                             )
                         )
@@ -725,6 +731,7 @@ class GameService(
         return conn.prepareStatement(
             """
             SELECT d.id, d.current_racing_team_id, d.stat_qualifying,
+                   t.car_performance,
                    pf.focus AS focus
               FROM drivers d
               JOIN teams t ON t.id = d.current_racing_team_id
@@ -740,11 +747,12 @@ class GameService(
                     while (rs.next()) {
                         val baseStat = rs.getInt("stat_qualifying").toDouble()
                         val focus = rs.getString("focus")
-                        val effectiveStat = if (focus == "SETUP") {
+                        val withSetup = if (focus == "SETUP") {
                             baseStat * setupBonusMultiplier
                         } else {
                             baseStat
                         }
+                        val effectiveStat = withSetup + carTerm(rs.getInt("car_performance"))
                         add(
                             RaceSim.QualifyingEntrant(
                                 driverId = rs.getObject("id", UUID::class.java),
@@ -912,10 +920,25 @@ class GameService(
         phase = phase.name,
     )
 
+    /**
+     * Car-performance contribution to a driver's qualifying/race pace, folded
+     * into the stat at the GameService boundary (RaceSim stays pure and stat-
+     * driven). Only the *relative* term between cars affects finishing order —
+     * the baseline cancels in sorting — but it's kept for readable numbers.
+     * With seeded cars ~58..82 and weight 0.4 the top car is worth ~+10 pace
+     * over the slowest: a real edge, comparable to a strong grid slot, without
+     * eclipsing driver skill (pace spread ~19).
+     */
+    private fun carTerm(carPerformance: Int): Double =
+        (carPerformance - CAR_PERF_BASELINE) * CAR_PERF_WEIGHT
+
     private companion object {
         const val QUALIFYING_SALT = 0x5111EFA11L
         const val RACE_SALT = 0xACE0FA10L
         const val SPRINT_QUALIFYING_SALT = 0x5111EFB22L
         const val SPRINT_SALT = 0xACE0FB21L
+
+        const val CAR_PERF_BASELINE = 65
+        const val CAR_PERF_WEIGHT = 0.4
     }
 }
