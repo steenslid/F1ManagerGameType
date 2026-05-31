@@ -934,6 +934,13 @@ class OffSeasonService(private val db: Database) {
             val oldValue: Long,
         )
 
+        // The player owns their own sponsor renewals (via SponsorMarketService),
+        // so auto-renewal skips the player team. `IS DISTINCT FROM` makes the
+        // filter a no-op when no player team is selected (player_team_id NULL).
+        val playerTeamId = conn.prepareStatement("SELECT player_team_id FROM game").use { stmt ->
+            stmt.executeQuery().use { rs -> if (rs.next()) rs.getString("player_team_id") else null }
+        }
+
         val lapsed = conn.prepareStatement(
             """
             SELECT ts.id, ts.team_id, t.name AS team_name,
@@ -945,6 +952,7 @@ class OffSeasonService(private val db: Database) {
               JOIN sponsors s ON s.id = ts.sponsor_id
              WHERE ts.end_year < ?
                AND ts.end_year >= ?
+               AND ts.team_id IS DISTINCT FROM ?
             """.trimIndent()
         ).use { stmt ->
             // The second filter constrains us to "just-expired" deals (ended
@@ -955,6 +963,7 @@ class OffSeasonService(private val db: Database) {
             // out of this window next year — it won't be reconsidered.
             stmt.setInt(1, newSeasonYear)
             stmt.setInt(2, newSeasonYear - 1)
+            stmt.setString(3, playerTeamId)
             stmt.executeQuery().use { rs ->
                 buildList {
                     while (rs.next()) {

@@ -4,7 +4,7 @@ import { api } from '../api.js'
 import { useGame } from '../useGame.js'
 import { fmtMoney, fmtMoneyFull } from '../format.js'
 
-const { state: game, myTeam } = useGame()
+const { state: game, myTeam, refreshAll } = useGame()
 
 const activeTab = ref('drivers')
 const isLoading = ref(true)
@@ -14,8 +14,12 @@ const market = ref({ active: false }) // MarketStateDto
 const freeAgents = ref([])
 const offers = ref([])
 
-const sponsorships = ref([])
+// Sponsor market
+const sm = ref(null)            // SponsorMarketDto
 const sponsorsLoading = ref(false)
+const signForm = ref(null)
+const renewForm = ref(null)
+const sponsorBusy = ref(false)
 
 // Inline offer form
 const offerDriver = ref(null) // the FreeAgentDto being offered to
@@ -49,14 +53,12 @@ async function loadMarket() {
   }
 }
 
-async function loadSponsorships() {
-  if (!myTeam.value?.id) { sponsorships.value = []; return }
+async function loadSponsorMarket() {
   sponsorsLoading.value = true
   try {
-    const res = await api.listTeamSponsorships({ team: myTeam.value.id })
-    sponsorships.value = res.data || []
-  } catch {
-    sponsorships.value = []
+    sm.value = (await api.getSponsorMarket()).data
+  } catch (e) {
+    error.value = e.message || String(e)
   } finally {
     sponsorsLoading.value = false
   }
@@ -64,7 +66,77 @@ async function loadSponsorships() {
 
 function switchTab(tab) {
   activeTab.value = tab
-  if (tab === 'sponsors' && !sponsorships.value.length) loadSponsorships()
+  if (tab === 'sponsors' && !sm.value) loadSponsorMarket()
+}
+
+function startSign(s) {
+  const max = Number(s.maxAnnualValue)
+  signForm.value = {
+    sponsorId: s.sponsorId, name: s.name, canBeTitle: s.canBeTitle,
+    min: Number(s.minAnnualValue) || 1_000_000, max, value: max, years: 2, title: false,
+  }
+  renewForm.value = null
+}
+
+function startRenew(d) {
+  const max = Number(d.maxAnnualValue)
+  renewForm.value = {
+    dealId: d.id, name: d.sponsorName, min: 1_000_000, max,
+    value: Math.min(Number(d.annualValue), max) || max, years: 2,
+  }
+  signForm.value = null
+}
+
+function closeForms() { signForm.value = null; renewForm.value = null }
+
+async function submitSign() {
+  const f = signForm.value
+  if (!f) return
+  sponsorBusy.value = true
+  error.value = null
+  try {
+    sm.value = (await api.signSponsor({
+      sponsorId: f.sponsorId, annualValue: Number(f.value),
+      termYears: Number(f.years), title: !!f.title,
+    })).data
+    signForm.value = null
+    await refreshAll()
+  } catch (e) {
+    error.value = e.message || String(e)
+  } finally {
+    sponsorBusy.value = false
+  }
+}
+
+async function submitRenew() {
+  const f = renewForm.value
+  if (!f) return
+  sponsorBusy.value = true
+  error.value = null
+  try {
+    sm.value = (await api.renewSponsor({
+      dealId: f.dealId, annualValue: Number(f.value), termYears: Number(f.years),
+    })).data
+    renewForm.value = null
+    await refreshAll()
+  } catch (e) {
+    error.value = e.message || String(e)
+  } finally {
+    sponsorBusy.value = false
+  }
+}
+
+async function cancelDeal(d) {
+  sponsorBusy.value = true
+  error.value = null
+  try {
+    sm.value = (await api.cancelSponsor(d.id)).data
+    await refreshAll()
+  } catch (e) {
+    error.value = e.message || String(e)
+  } finally {
+    sponsorBusy.value = false
+  }
 }
 
 function startOffer(driver) {
@@ -198,21 +270,88 @@ async function withdraw(offer) {
 
     <!-- SPONSORSHIPS -->
     <div v-else>
-      <div v-if="!myTeam" class="faint p-20 text-center">Select a team to view its sponsorship deals.</div>
-      <div v-else-if="sponsorsLoading" class="faint p-20">Loading deals…</div>
-      <table v-else class="data-table">
-        <thead><tr><th>Sponsor</th><th>Tier</th><th class="r">Annual Value</th><th>Term</th><th class="r"></th></tr></thead>
-        <tbody>
-          <tr v-for="s in sponsorships" :key="s.id">
-            <td class="name">{{ s.sponsorName }}</td>
-            <td class="faint">{{ s.sponsorTier }}</td>
-            <td class="r num">{{ fmtMoney(s.annualValue) }}</td>
-            <td class="faint">{{ s.startYear }}–{{ s.endYear }}</td>
-            <td class="r"><span v-if="s.isTitle" class="pill title">Title</span></td>
-          </tr>
-          <tr v-if="!sponsorships.length"><td colspan="5" class="faint text-center p-20">No sponsorship deals.</td></tr>
-        </tbody>
-      </table>
+      <div v-if="!myTeam" class="faint p-20 text-center">Select a team to manage sponsors.</div>
+      <div v-else-if="sponsorsLoading" class="faint p-20">Loading sponsors…</div>
+      <div v-else-if="sm" class="market-grid">
+        <div class="list-section">
+          <div class="sec-head">
+            <h3 class="muted uppercase">Your sponsors</h3>
+            <span class="slots">{{ sm.dealsUsed }}/{{ sm.maxTotalDeals }} slots<span v-if="sm.titleUsed"> · title filled</span></span>
+          </div>
+          <table class="data-table">
+            <thead><tr><th>Sponsor</th><th>Tier</th><th class="r">Value</th><th>Term</th><th class="r"></th></tr></thead>
+            <tbody>
+              <tr v-for="d in sm.currentDeals" :key="d.id" :class="{ lapsed: d.expired }">
+                <td class="name">{{ d.sponsorName }} <span v-if="d.isTitle" class="pill title">Title</span></td>
+                <td class="faint">{{ d.tier }}</td>
+                <td class="r num">{{ fmtMoney(d.annualValue) }}</td>
+                <td class="faint">{{ d.startYear }}–{{ d.endYear }}<span v-if="d.expired" class="exp"> · expired</span></td>
+                <td class="r nowrap">
+                  <button class="btn-small" @click="startRenew(d)">{{ d.expired ? 'Re-sign' : 'Renew' }}</button>
+                  <button class="btn-cancel btn-tiny" :disabled="sponsorBusy" @click="cancelDeal(d)">Drop</button>
+                </td>
+              </tr>
+              <tr v-if="!sm.currentDeals.length"><td colspan="5" class="faint text-center p-20">No sponsor deals — sign one below.</td></tr>
+            </tbody>
+          </table>
+
+          <h3 class="muted uppercase mt">Available sponsors</h3>
+          <table class="data-table">
+            <thead><tr><th>Sponsor</th><th>Tier</th><th class="text-center">Prestige</th><th class="r">Will pay up to</th><th class="r"></th></tr></thead>
+            <tbody>
+              <tr v-for="s in sm.available" :key="s.sponsorId" :class="{ dim: !s.willDeal }">
+                <td class="name">{{ s.name }} <span class="faint nat">{{ s.industry }}</span></td>
+                <td class="faint">{{ s.tier }}</td>
+                <td class="text-center num">{{ s.prestige }}</td>
+                <td class="r num"><span v-if="s.willDeal">{{ fmtMoney(s.maxAnnualValue) }}</span><span v-else class="faint">—</span></td>
+                <td class="r">
+                  <button v-if="s.willDeal" class="btn-small" :disabled="sm.dealsUsed >= sm.maxTotalDeals" @click="startSign(s)">Sign</button>
+                  <span v-else class="faint small">Prestige low</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="side-section">
+          <!-- Sign form -->
+          <div v-if="signForm" class="finance-box offer-form">
+            <h3 class="muted uppercase">Sign · {{ signForm.name }}</h3>
+            <label>Annual value</label>
+            <input type="range" :min="signForm.min" :max="signForm.max" step="500000" v-model.number="signForm.value" />
+            <div class="hint">{{ fmtMoneyFull(signForm.value) }} <span class="faint">· max {{ fmtMoney(signForm.max) }}</span></div>
+            <label>Term (years)</label>
+            <input type="number" v-model.number="signForm.years" min="1" max="5" />
+            <label v-if="signForm.canBeTitle && !sm.titleUsed" class="check"><input type="checkbox" v-model="signForm.title" /> Title sponsor</label>
+            <div class="offer-actions">
+              <button class="btn-cancel" @click="closeForms">Cancel</button>
+              <button class="btn" :disabled="sponsorBusy" @click="submitSign">{{ sponsorBusy ? 'Signing…' : 'Sign deal' }}</button>
+            </div>
+          </div>
+
+          <!-- Renew form -->
+          <div v-else-if="renewForm" class="finance-box offer-form">
+            <h3 class="muted uppercase">Renew · {{ renewForm.name }}</h3>
+            <label>Annual value</label>
+            <input type="range" :min="renewForm.min" :max="renewForm.max" step="500000" v-model.number="renewForm.value" />
+            <div class="hint">{{ fmtMoneyFull(renewForm.value) }} <span class="faint">· max {{ fmtMoney(renewForm.max) }}</span></div>
+            <label>Term (years)</label>
+            <input type="number" v-model.number="renewForm.years" min="1" max="5" />
+            <div class="offer-actions">
+              <button class="btn-cancel" @click="closeForms">Cancel</button>
+              <button class="btn" :disabled="sponsorBusy" @click="submitRenew">{{ sponsorBusy ? 'Saving…' : 'Renew deal' }}</button>
+            </div>
+          </div>
+
+          <div class="finance-box" :style="(signForm || renewForm) ? 'margin-top:16px' : ''">
+            <h3 class="muted uppercase">Portfolio</h3>
+            <div class="fin-row"><span class="k">Active deals</span><span class="v num">{{ sm.dealsUsed }}/{{ sm.maxTotalDeals }}</span></div>
+            <div class="fin-row"><span class="k">Title sponsor</span><span class="v">{{ sm.titleUsed ? 'Yes' : '—' }}</span></div>
+            <div class="fin-row"><span class="k">Team prestige</span><span class="v num">{{ sm.teamPrestige }}</span></div>
+            <p class="faint small note">New and renewed deals take effect from next pre-season. Your deals no longer auto-renew — manage them here.</p>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -273,4 +412,16 @@ async function withdraw(offer) {
 .empty-cell p { max-width: 380px; margin: 0 auto; font-size: 12px; line-height: 1.5; }
 .faint { color: var(--faint); }
 .muted { color: var(--muted); }
+
+.sec-head { display: flex; align-items: baseline; justify-content: space-between; }
+.slots { font-size: 11px; color: var(--muted); }
+.mt { margin-top: 22px; }
+.nowrap { white-space: nowrap; }
+tr.lapsed td { opacity: .5; }
+tr.dim td { opacity: .5; }
+.exp { color: var(--warn); }
+.check { display: flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--fg); }
+.check input { width: auto; }
+.note { margin-top: 10px; line-height: 1.5; }
+.offer-form input[type="range"] { width: 100%; accent-color: var(--accent); }
 </style>

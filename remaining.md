@@ -120,6 +120,21 @@ the user's repo should now contain all of them:
    into the old surplus — back-markers run tight and could dip negative in bad
    years, which would trip the market affordability gate. Tune the seed
    multiplier / CAR_DEV_* constants once it's been played.
+19. `sponsor-market` — player sponsor agency (no schema change). New
+   `SponsorMarketService` + `SponsorMarketRoutes`
+   (`GET /api/sponsors/market`, `POST .../sign|renew|cancel`): the player
+   chooses and signs new sponsors, renews/extends existing deals, or drops
+   them. A sponsor deals only if team prestige clears its bar (from
+   `prestige_preference`) and pays within `budget_min..budget_max` scaled by
+   how well the team clears it (deterministic, no RNG). Slots: ≤5 active deals,
+   ≤1 title (title needs a TITLE/PRIMARY sponsor). `OffSeasonService.
+   renewSponsors` now SKIPS the player team (`team_id IS DISTINCT FROM`
+   player) — the player owns their renewals; AI still auto-renews. Frontend:
+   the Market screen's Sponsorships tab is now an interactive market (current
+   deals with renew/drop, signable sponsors with a value slider + term + title
+   toggle). New/renewed deals take effect from the next pre-season revenue
+   tick. Follow-ups: new sponsor entrants over time, an upfront signing fee,
+   and performance (WCC) bonuses to offer values.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
@@ -378,9 +393,12 @@ table on sprint weekends.
 
 ### Loose ends — less than a round
 
-- Sponsor performance bonuses (patch 7) and defection (patch 9) both
-  landed; remaining sponsor work is new entrants joining the pool and a
-  player negotiation surface.
+- Sponsor performance bonuses (patch 7), defection (patch 9), and the player
+  negotiation surface (patch 19 — sign/renew/cancel, player deals no longer
+  auto-renew) all landed. Remaining sponsor work: new entrants joining the
+  pool over time, AI teams actively managing their portfolios (they still
+  only auto-renew), an upfront signing fee, and WCC-performance bonuses on
+  offer values.
 - New sponsor entrants joining the pool yearly (current renewal stub
   only extends existing deals; the sponsor table stays static).
 - Aging stat drift for stats beyond `stat_pace` / `skill_design` (other

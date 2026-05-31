@@ -66,6 +66,12 @@ export const api = {
   getRd: () => request('GET', '/api/team/rd'),
   setRd: (budget) => request('POST', '/api/team/rd', { budget }),
 
+  // Sponsor market
+  getSponsorMarket: () => request('GET', '/api/sponsors/market'),
+  signSponsor: (req) => request('POST', '/api/sponsors/market/sign', req),
+  renewSponsor: (req) => request('POST', '/api/sponsors/market/renew', req),
+  cancelSponsor: (dealId) => request('POST', '/api/sponsors/market/cancel', { dealId }),
+
   // Standings
   getStandings: (filter) => request('GET', '/api/standings' + qs(filter)),
 

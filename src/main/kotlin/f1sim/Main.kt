@@ -8,6 +8,7 @@ import f1sim.game.GameService
 import f1sim.game.LineupService
 import f1sim.game.OffSeasonService
 import f1sim.game.RaceWeekendService
+import f1sim.game.SponsorMarketService
 import f1sim.game.StandingsService
 import f1sim.game.TeamRdService
 import f1sim.http.Server
@@ -38,6 +39,7 @@ fun main() {
     val standingsService = StandingsService(db)
     val lineupService = LineupService(db)
     val teamRdService = TeamRdService(db)
+    val sponsorMarketService = SponsorMarketService(db)
     val server = Server(
         config = config,
         db = db,
@@ -48,6 +50,7 @@ fun main() {
         driverMarketService = driverMarketService,
         lineupService = lineupService,
         teamRdService = teamRdService,
+        sponsorMarketService = sponsorMarketService,
     )
     server.start()
 
