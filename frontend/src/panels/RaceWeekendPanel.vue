@@ -19,7 +19,7 @@ const lineup = ref(null)     // LineupDto
 const selectedOut = ref(null)
 const selectedIn = ref(null)
 const swapping = ref(false)
-const SOURCE_LABEL = { RESERVE: 'Reserve', ACADEMY: 'Academy', F2: 'F2', F3: 'F3', JUNIOR: 'Junior' }
+const SOURCE_LABEL = { FREE_AGENT: 'Free agent', RESERVE: 'Reserve', ACADEMY: 'Academy', F2: 'F2', F3: 'F3', JUNIOR: 'Junior' }
 
 const FOCUS_OPTIONS = [
   { value: 'SETUP', label: 'Setup (+pace)' },
@@ -167,9 +167,12 @@ function tyreClass(status) { return '' }
 
     <div v-if="phase === 'BETWEEN_ROUNDS'" class="lineup">
       <p class="hint faint">
-        Between rounds you can call up a reserve or an F2/F3 junior (18+) to
-        replace one of your race drivers. The driver you bench becomes your
-        reserve and can be recalled later.
+        Between rounds you can replace one of your race drivers with any driver
+        not currently racing in F1 (18+) — a free agent, your reserve, or an
+        F2/F3 junior. Handy for bringing in an experienced free agent when a
+        rookie isn't working out. The driver you bench becomes your reserve and
+        can be recalled later. (Contracted F1 drivers can't be poached
+        mid-season — that's the off-season market.)
       </p>
       <div v-if="!hasTeam" class="faint p-20">Select a team to manage your lineup.</div>
       <div v-else-if="!lineup" class="faint p-20">Loading lineup…</div>
@@ -213,7 +216,7 @@ function tyreClass(status) { return '' }
               <span v-if="selectedIn === d.driverId" class="lu-tag in">Call up</span>
             </div>
             <div v-if="!lineup.callUpCandidates.length" class="faint p-20">
-              No reserve or F2/F3 junior drivers are available to call up.
+              No free agents, reserves, or F2/F3 juniors are available to call up.
             </div>
           </div>
         </div>

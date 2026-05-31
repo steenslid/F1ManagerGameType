@@ -85,16 +85,18 @@ the user's repo should now contain all of them:
 16. `lineup-callup` — mid-season reserve / junior call-up. New
    `LineupService` + `LineupRoutes` (`GET /api/team/lineup`,
    `POST /api/team/lineup/swap`), wired in Main/Server. Between rounds
-   (BETWEEN_ROUNDS phase) the player can bench one race driver and promote a
-   non-F1 driver — a reserve/academy driver or an F2/F3 junior aged 18+ — into
-   the seat; the benched driver is demoted to the team's reserve
-   (`reserve_for_team_id`) and keeps their contract so they can be recalled.
-   No schema change, no RNG. Frontend: RaceWeekendPanel now shows a lineup
-   manager during BETWEEN_ROUNDS (pick a driver to bench + a call-up, confirm).
-   Deliberately narrow per design: incoming must NOT already be an F1 race
-   driver (mid-season poaching of contracted F1 drivers is the off-season
-   market's job — that's the NEXT planned slice: let the player negotiate with
-   ANY 18+ driver including those under contract at rival F1 teams).
+   (BETWEEN_ROUNDS phase) the player can bench one race driver and bring in any
+   driver NOT currently racing in F1, aged 18+ — a free agent, a reserve/
+   academy driver, or an F2/F3 junior (e.g. an experienced free agent veteran
+   replacing a rookie that flopped). Eligibility rule:
+   `current_racing_team_id IS NULL OR team.series IN ('F2','F3')`. The benched
+   driver is demoted to the team's reserve (`reserve_for_team_id`) and keeps
+   their contract so they can be recalled. No schema change, no RNG. Frontend:
+   RaceWeekendPanel shows a lineup manager during BETWEEN_ROUNDS (pick a driver
+   to bench + a call-up, confirm). Deliberately narrow per design: a contracted
+   F1 race driver can NOT be poached mid-season (that's the off-season market's
+   job — the NEXT planned slice: negotiate with ANY 18+ driver including those
+   under contract at rival F1 teams).
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
@@ -514,13 +516,16 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   fix for filling player-skipped seats. Mid-season the player can also
   call up a reserve/F2/F3 junior via `LineupService` (BETWEEN_ROUNDS),
   but only the player team — AI teams don't call up reserves yet.
-- **Mid-season swaps are junior/reserve-only.** `LineupService.swap`
-  (patch 16) lets the player bench a race driver for a non-F1 driver
-  (reserve/academy/F2/F3, 18+) between rounds; the benched driver becomes
-  the team's reserve. It deliberately can't bring in a free agent or poach
-  a contracted F1 driver mid-season. There's no cost/penalty for benching a
-  contracted driver yet (their salary just stops counting in the next
-  PRE_SEASON cost tick while they sit as reserve), and AI teams never swap.
+- **Mid-season swaps: any non-F1 driver, no negotiation.** `LineupService.swap`
+  (patch 16) lets the player bench a race driver for any 18+ driver not
+  currently racing in F1 — free agents, the team's reserves, and F2/F3 juniors
+  — between rounds; the benched driver becomes the team's reserve. It still
+  can't poach a *contracted* F1 driver mid-season (off-season market's job).
+  There's no negotiation/cost gate: a free agent is hired at their existing
+  `current_salary` (which can be 0 for a freshly-promoted F2 champion → a free
+  signing until the next market sets a wage), and benching a contracted driver
+  carries no penalty (their salary just stops counting in the next PRE_SEASON
+  cost tick while they sit as reserve). AI teams never swap.
 - **Market state is global to the save.** Only one market can be active
   at a time (singleton tables). Fine for single-player, but means
   pausing mid-market and starting a new save can leave orphan offers

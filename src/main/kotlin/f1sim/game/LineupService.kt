@@ -128,16 +128,10 @@ class LineupService(private val db: Database) {
               LEFT JOIN teams t ON t.id = d.current_racing_team_id
              WHERE NOT d.retired
                AND d.current_age >= $MIN_CALLUP_AGE
-               AND (
-                     t.series IN ('F2','F3')
-                  OR d.reserve_for_team_id = ?
-                  OR d.academy_team_id = ?
-               )
+               AND (d.current_racing_team_id IS NULL OR t.series IN ('F2','F3'))
              ORDER BY d.stat_pace DESC, d.name ASC
             """.trimIndent()
         ).use { stmt ->
-            stmt.setString(1, playerTeamId)
-            stmt.setString(2, playerTeamId)
             stmt.executeQuery().use { rs ->
                 buildList {
                     while (rs.next()) {
@@ -149,6 +143,7 @@ class LineupService(private val db: Database) {
                             academyTeam == playerTeamId -> "ACADEMY"
                             series == "F2" -> "F2"
                             series == "F3" -> "F3"
+                            series == null -> "FREE_AGENT" // no current racing team
                             else -> "JUNIOR"
                         }
                         add(mapDriver(rs, source))
@@ -189,7 +184,7 @@ class LineupService(private val db: Database) {
                     ?: error("No player team selected — cannot change the lineup")
 
                 requireIsPlayerRaceDriver(conn, outId, playerTeamId)
-                requireIsCallUpEligible(conn, inId, playerTeamId)
+                requireIsCallUpEligible(conn, inId)
 
                 // Incoming junior/reserve takes the race seat on a fresh deal.
                 conn.prepareStatement(
@@ -264,7 +259,7 @@ class LineupService(private val db: Database) {
         if (!ok) throw NotFoundException("Driver $driverId is not one of your race drivers")
     }
 
-    private fun requireIsCallUpEligible(conn: Connection, driverId: UUID, playerTeamId: String) {
+    private fun requireIsCallUpEligible(conn: Connection, driverId: UUID) {
         val ok = conn.prepareStatement(
             """
             SELECT 1
@@ -273,20 +268,15 @@ class LineupService(private val db: Database) {
              WHERE d.id = ?
                AND NOT d.retired
                AND d.current_age >= $MIN_CALLUP_AGE
-               AND (
-                     t.series IN ('F2','F3')
-                  OR d.reserve_for_team_id = ?
-                  OR d.academy_team_id = ?
-               )
+               AND (d.current_racing_team_id IS NULL OR t.series IN ('F2','F3'))
             """.trimIndent()
         ).use { stmt ->
             stmt.setObject(1, driverId)
-            stmt.setString(2, playerTeamId)
-            stmt.setString(3, playerTeamId)
             stmt.executeQuery().use { rs -> rs.next() }
         }
         if (!ok) throw NotFoundException(
-            "Driver $driverId can't be called up — must be a reserve/academy or an F2/F3 driver aged $MIN_CALLUP_AGE+"
+            "Driver $driverId can't be called up — must be a free agent, reserve/academy, " +
+                "or an F2/F3 driver aged $MIN_CALLUP_AGE+ (a contracted F1 race driver can't be poached mid-season)"
         )
     }
 
