@@ -398,7 +398,7 @@ CREATE TABLE off_season_events (
 
     CONSTRAINT off_season_event_type_valid CHECK (event_type IN (
         'FINANCE_SETTLED','AGE_TICK','STAT_DRIFT','RETIREMENT','SPONSOR_REVENUE','OPERATING_COST',
-        'CONTRACT_EXPIRED','MARKET_SIGNING'
+        'CONTRACT_EXPIRED','MARKET_SIGNING','JUNIOR_PROMOTION'
     )),
     CONSTRAINT off_season_subject_kind_valid CHECK (subject_kind IN (
         'DRIVER','PERSONNEL','TEAM'
