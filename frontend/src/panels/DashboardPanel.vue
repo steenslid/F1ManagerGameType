@@ -32,6 +32,15 @@ watch(() => [state.overview?.year, state.overview?.round], loadStandings)
 
 const myTeamId = computed(() => state.overview?.playerTeam?.id || null)
 
+const carPerformance = computed(() => myTeam.value?.carPerformance ?? null)
+const f1Teams = computed(() => state.teams.filter((t) => t.series === 'F1'))
+const carRank = computed(() => {
+  if (carPerformance.value == null) return null
+  const sorted = [...f1Teams.value].sort((a, b) => (b.carPerformance ?? 0) - (a.carPerformance ?? 0))
+  const idx = sorted.findIndex((t) => t.id === myTeamId.value)
+  return idx >= 0 ? idx + 1 : null
+})
+
 const finance = computed(() => myTeam.value?.finance || null)
 const net = computed(() => {
   if (!finance.value) return 0
@@ -167,6 +176,17 @@ function posClass(pos) {
         </div>
         <div v-else class="faint empty">Select a team to see its finances.</div>
       </div>
+
+      <!-- Car performance -->
+      <div class="card car" v-if="carPerformance != null">
+        <h2>Car performance</h2>
+        <div class="car-row">
+          <span class="big num">{{ carPerformance }}</span>
+          <span class="lab" v-if="carRank">P{{ carRank }} of {{ f1Teams.length }} on the grid</span>
+        </div>
+        <div class="bar"><span :style="{ width: carPerformance + '%' }"></span></div>
+        <span class="go" @click="emit('navigate', 'R&D')">Develop in R&D →</span>
+      </div>
     </div>
   </div>
 </template>
@@ -213,5 +233,10 @@ tr.me td { background: var(--accent-soft); }
 .pos-v { color: var(--good); } .neg-v { color: var(--bad); }
 .bar { height: 6px; border-radius: 4px; background: var(--surface-2); overflow: hidden; margin-top: 4px; }
 .bar > span { display: block; height: 100%; background: var(--accent); }
+.car-row { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+.car .big { font-size: 26px; font-weight: 800; }
+.car .lab { color: var(--muted); font-size: 12px; }
+.car .go { display: inline-block; margin-top: 10px; font-size: 12px; color: #ff7066; font-weight: 700; cursor: pointer; }
+.car .go:hover { text-decoration: underline; }
 .faint { color: var(--faint); }
 </style>
