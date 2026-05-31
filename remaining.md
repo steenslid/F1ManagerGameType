@@ -106,6 +106,20 @@ the user's repo should now contain all of them:
    shown on the team-select cards + constructors table. Replaces the long-
    standing placeholder where car quality had ZERO effect on results. No R&D
    yet — the car is static this slice; developing it is slice B.
+18. `car-rd` (R&D slice B) — R&D budget develops the car over seasons. SCHEMA
+   CHANGE (`teams.rd_budget BIGINT DEFAULT 0`, `CAR_DEVELOPMENT` event type) +
+   seed derivation (AI rd_budget by prestige × ai_development_focus so the grid
+   holds without an AI R&D brain). `OffSeasonService.runCarDevelopment`
+   (PRE_SEASON) drifts each car toward the level its spend+regulation
+   understanding sustains (saturating spend curve, inertia 0.4, floor 45,
+   deterministic). `rd_budget` now flows into the operating-cost tick. New
+   `TeamRdService` + `TeamRdRoutes` (`GET/POST /api/team/rd`) let the player
+   set their budget (0–500M); new R&D panel (slider + grid car ratings) wired
+   into the nav. CAR_DEVELOPMENT events show in the off-season report.
+   BALANCE CAVEAT (untested): seeded rd_budget (top ~121M, back ~42M) eats
+   into the old surplus — back-markers run tight and could dip negative in bad
+   years, which would trip the market affordability gate. Tune the seed
+   multiplier / CAR_DEV_* constants once it's been played.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
@@ -315,12 +329,12 @@ table on sprint weekends.
   with how aggressive the player's offer is (high-salary offers signal
   importance and provoke harder counters), AI personality
   (`ai_aggression`) modulates the bump size.
-- **R&D.** `part_versions`, `team_parts_current` (or just MAX(mk_version)
-  per supplier-style), `development_projects`. Player allocates R&D budget
-  by part type at season start; tick in `BETWEEN_ROUNDS` hook. Design doc
-  § "Car Performance Model" + § "R&D allocation". Independent of markets
-  — can slot in any time. Car quality will then modulate driver pace in
-  RaceSim.
+- **R&D.** First cut landed (patches 17–18): a single `car_performance` rating
+  feeds the sim and a player-set `rd_budget` develops it each pre-season. Still
+  to deepen: per-part-area development (`part_versions`, aero/PU/chassis split)
+  instead of one scalar, in-season development (`BETWEEN_ROUNDS` ticks rather
+  than only pre-season), regulation-reset shocks at era boundaries, and an
+  explicit AI R&D brain (AI rd_budget is static seed for now).
 - **News / events.** `event_templates`, `event_log`. Prerequisite eval,
   decision branching, effects application. Transition hooks become where
   events get emitted.
@@ -556,10 +570,10 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   keeps its old `end_year` and drops out of the just-expired window next
   year, so it's gone for good and the revenue tick skips it. Still no new
   sponsor entrants joining the pool, no negotiation surface for the player.
-- **`current_year_expenses` lacks R&D and engine costs.** Once R&D
-  lands, expense math needs an additional term. Currently:
-  `base_operating_cost + academy_investment + driver_salaries +
-  personnel_salaries`.
+- **`current_year_expenses` now includes R&D; still lacks engine costs.**
+  As of patch 18: `base_operating_cost + academy_investment + rd_budget +
+  driver_salaries + personnel_salaries`. Customer-engine supply costs are
+  still unmodelled.
 - **FOM prize curve is generous for sparse grids.** With 5 teams, the
   top end pays out heavily ($715M total to 5 teams). When F2 promotions
   add more teams, the same curve spread across 10 teams will feel

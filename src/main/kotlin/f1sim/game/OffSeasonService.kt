@@ -97,14 +97,110 @@ class OffSeasonService(private val db: Database) {
      */
     fun runPreSeasonHooks(conn: Connection, newSeasonYear: Int): Int {
         val renewalEvents = renewSponsors(conn, newSeasonYear)
+        val developmentEvents = runCarDevelopment(conn, newSeasonYear)
         val revenueEvents = applySponsorRevenueTick(conn, newSeasonYear)
         val costEvents = applyOperatingCostsTick(conn, newSeasonYear)
-        val total = renewalEvents + revenueEvents + costEvents
+        val total = renewalEvents + developmentEvents + revenueEvents + costEvents
         log.info(
-            "PRE_SEASON {}: {} sponsor renewal/defection events, {} sponsor revenue events, {} operating cost events",
-            newSeasonYear, renewalEvents, revenueEvents, costEvents,
+            "PRE_SEASON {}: {} sponsor events, {} car development, {} sponsor revenue events, {} operating cost events",
+            newSeasonYear, renewalEvents, developmentEvents, revenueEvents, costEvents,
         )
         return total
+    }
+
+    // ------------------------------------------------------------------
+    // Step 4d: Car development (PRE_SEASON — R&D spend evolves the car)
+    // ------------------------------------------------------------------
+
+    /**
+     * Each F1 team's car drifts toward the performance level its R&D spend +
+     * technical capability can sustain. Self-balancing with inertia:
+     *
+     *   spendFactor = rd_budget / (rd_budget + REF_SPEND)        (0..1, saturating)
+     *   tech        = TECH_BASE + TECH_SWING * regulation_understanding
+     *   target      = FLOOR_TARGET + spendFactor * SPAN * tech   (clamped MIN..MAX)
+     *   new_car     = car + ADJUST_RATE * (target - car)
+     *
+     * A team that pours money in climbs over a few seasons; one that cuts R&D
+     * slides back toward the ~FLOOR_TARGET back-marker level as rivals develop.
+     * Deterministic (no RNG) — pure function of spend + reg understanding.
+     * Seeded `rd_budget` keeps the AI grid roughly stable; the player tunes
+     * their own via the R&D endpoint, trading cash for car performance.
+     */
+    private fun runCarDevelopment(conn: Connection, newSeasonYear: Int): Int {
+        data class Row(
+            val teamId: String,
+            val teamName: String,
+            val oldCar: Int,
+            val rdBudget: Long,
+            val regUnderstanding: Double,
+        )
+
+        val rows = conn.prepareStatement(
+            """
+            SELECT id, name, car_performance, rd_budget, regulation_understanding
+              FROM teams
+             WHERE series = 'F1'
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            Row(
+                                teamId = rs.getString("id"),
+                                teamName = rs.getString("name"),
+                                oldCar = rs.getInt("car_performance"),
+                                rdBudget = rs.getLong("rd_budget"),
+                                regUnderstanding = rs.getDouble("regulation_understanding"),
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        if (rows.isEmpty()) return 0
+
+        data class Update(val teamId: String, val teamName: String, val oldCar: Int, val newCar: Int, val target: Int, val rdBudget: Long)
+
+        val updates = rows.mapNotNull { r ->
+            val spend = r.rdBudget.toDouble()
+            val spendFactor = if (spend <= 0.0) 0.0 else spend / (spend + CAR_DEV_REF_SPEND)
+            val tech = CAR_DEV_TECH_BASE + CAR_DEV_TECH_SWING * r.regUnderstanding
+            val target = (CAR_DEV_FLOOR_TARGET + spendFactor * CAR_DEV_SPAN * tech)
+                .coerceIn(CAR_DEV_MIN.toDouble(), CAR_DEV_MAX.toDouble())
+            val newCar = (r.oldCar + CAR_DEV_ADJUST_RATE * (target - r.oldCar))
+                .roundToInt()
+                .coerceIn(CAR_DEV_MIN, CAR_DEV_MAX)
+            if (newCar == r.oldCar) null
+            else Update(r.teamId, r.teamName, r.oldCar, newCar, target.roundToInt(), r.rdBudget)
+        }
+        if (updates.isEmpty()) return 0
+
+        conn.prepareStatement(
+            "UPDATE teams SET car_performance = ? WHERE id = ?"
+        ).use { stmt ->
+            updates.forEach { u ->
+                stmt.setInt(1, u.newCar)
+                stmt.setString(2, u.teamId)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        }
+
+        logEvents(
+            conn, newSeasonYear,
+            updates.map { u ->
+                val arrow = if (u.newCar >= u.oldCar) "↑" else "↓"
+                EventToLog(
+                    "CAR_DEVELOPMENT", "TEAM", u.teamId, u.teamName,
+                    "${u.teamName}: car ${u.oldCar} $arrow ${u.newCar} " +
+                        "(R&D \$${u.rdBudget}/yr, sustains ~${u.target})",
+                )
+            },
+        )
+        log.info("Car development {}: {} teams changed", newSeasonYear, updates.size)
+        return updates.size
     }
 
     // ------------------------------------------------------------------
@@ -1149,6 +1245,7 @@ class OffSeasonService(private val db: Database) {
             val teamName: String,
             val base: Long,
             val academy: Long,
+            val rd: Long,
             val driverSalaries: Long,
             val personnelSalaries: Long,
             val total: Long,
@@ -1162,6 +1259,7 @@ class OffSeasonService(private val db: Database) {
                    t.current_year_expenses AS old_expenses,
                    t.base_operating_cost AS base_cost,
                    t.academy_investment AS academy_cost,
+                   t.rd_budget AS rd_cost,
                    COALESCE(driver_sum.salaries, 0) AS driver_salaries,
                    COALESCE(personnel_sum.salaries, 0) AS personnel_salaries
               FROM teams t
@@ -1188,15 +1286,17 @@ class OffSeasonService(private val db: Database) {
                         val oldExpenses = rs.getLong("old_expenses")
                         val base = rs.getLong("base_cost")
                         val academy = rs.getLong("academy_cost")
+                        val rd = rs.getLong("rd_cost")
                         val driverSalaries = rs.getLong("driver_salaries")
                         val personnelSalaries = rs.getLong("personnel_salaries")
-                        val total = base + academy + driverSalaries + personnelSalaries
+                        val total = base + academy + rd + driverSalaries + personnelSalaries
                         add(
                             TeamCost(
                                 teamId = rs.getString("team_id"),
                                 teamName = rs.getString("team_name"),
                                 base = base,
                                 academy = academy,
+                                rd = rd,
                                 driverSalaries = driverSalaries,
                                 personnelSalaries = personnelSalaries,
                                 total = total,
@@ -1228,7 +1328,7 @@ class OffSeasonService(private val db: Database) {
             updates.map { u ->
                 EventToLog(
                     "OPERATING_COST", "TEAM", u.teamId, u.teamName,
-                    "${u.teamName}: base $${u.base} + academy $${u.academy} + " +
+                    "${u.teamName}: base $${u.base} + academy $${u.academy} + R&D $${u.rd} + " +
                         "drivers $${u.driverSalaries} + " +
                         "personnel $${u.personnelSalaries} = $${u.total} " +
                         "→ current_year_expenses $${u.newExpenses}",
@@ -1335,5 +1435,21 @@ class OffSeasonService(private val db: Database) {
          * knob; raise for harsher consequences.
          */
         const val SPONSOR_DEFECTION_MAX_PROB = 0.40
+
+        // --- Car development (PRE_SEASON R&D tick) ---------------------
+        /** R&D spend at which spendFactor hits 0.5 (saturating curve). */
+        const val CAR_DEV_REF_SPEND = 60_000_000.0
+        /** tech = BASE + SWING * regulation_understanding → 0.7..1.3. */
+        const val CAR_DEV_TECH_BASE = 0.7
+        const val CAR_DEV_TECH_SWING = 0.6
+        /** Car level a zero-spend team trends toward (back-marker). */
+        const val CAR_DEV_FLOOR_TARGET = 45.0
+        /** How far full spend + top tech can lift the target above the floor. */
+        const val CAR_DEV_SPAN = 50.0
+        /** Fraction of the gap to target closed each season (inertia). */
+        const val CAR_DEV_ADJUST_RATE = 0.4
+        /** Clamp range for car_performance under development. */
+        const val CAR_DEV_MIN = 40
+        const val CAR_DEV_MAX = 95
     }
 }

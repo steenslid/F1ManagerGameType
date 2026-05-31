@@ -121,6 +121,7 @@ function evClass(type) {
   if (type === 'JUNIOR_PROMOTION') return 'promote'
   if (type === 'CONTRACT_EXPIRED') return 'expire'
   if (type === 'SPONSOR_REVENUE' || type === 'FINANCE_SETTLED' || type === 'OPERATING_COST') return 'money'
+  if (type === 'CAR_DEVELOPMENT') return 'dev'
   return ''
 }
 </script>
@@ -258,6 +259,7 @@ tr.me td { background: var(--accent-soft); }
 .event.promote .ev-dot { background: #b07cf0; }
 .event.expire .ev-dot { background: var(--warn); }
 .event.money .ev-dot { background: #5aa9e6; }
+.event.dev .ev-dot { background: #2dd4bf; }
 .ev-msg { font-size: 13px; }
 .ev-sub { font-size: 11px; margin-top: 1px; }
 .faint { color: var(--faint); }

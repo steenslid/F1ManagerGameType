@@ -14,6 +14,7 @@ import DriversPanel from './panels/DriversPanel.vue'
 import StandingsPanel from './panels/StandingsPanel.vue'
 import StaffPanel from './panels/StaffPanel.vue'
 import HistoryPanel from './panels/HistoryPanel.vue'
+import RdPanel from './panels/RdPanel.vue'
 import EventFeed from './panels/EventFeed.vue'
 
 const emit = defineEmits(['open-test-ui'])
@@ -37,7 +38,7 @@ const activePanel = ref('Dashboard')
 // Real screens first, then "coming soon" stubs for systems not built yet.
 const menuItems = [
   'Dashboard', 'Race Weekend', 'Schedule', 'Standings', 'Drivers', 'Staff',
-  'Market', 'Teams', 'History',
+  'Market', 'R&D', 'Teams', 'History',
 ]
 const stubItems = ['Academy']
 
@@ -137,6 +138,7 @@ function handleTeamSelected() {
         <DriversPanel v-else-if="activePanel === 'Drivers'" />
         <StandingsPanel v-else-if="activePanel === 'Standings'" />
         <StaffPanel v-else-if="activePanel === 'Staff'" />
+        <RdPanel v-else-if="activePanel === 'R&D'" />
         <HistoryPanel v-else-if="activePanel === 'History'" />
         <div v-else-if="activePanel === 'Academy'" class="card placeholder">
           <h2>Young Driver Academy</h2>

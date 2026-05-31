@@ -145,6 +145,7 @@ CREATE TABLE teams (
     heritage_payment                BIGINT       NOT NULL DEFAULT 0,
     base_operating_cost             BIGINT       NOT NULL DEFAULT 0,
     academy_investment              BIGINT       NOT NULL DEFAULT 0,
+    rd_budget                       BIGINT       NOT NULL DEFAULT 0,
     cap_compliance_status           TEXT         NOT NULL DEFAULT 'COMPLIANT',
 
     regulation_understanding        NUMERIC(3,2) NOT NULL DEFAULT 0.50,
@@ -400,7 +401,7 @@ CREATE TABLE off_season_events (
 
     CONSTRAINT off_season_event_type_valid CHECK (event_type IN (
         'FINANCE_SETTLED','AGE_TICK','STAT_DRIFT','RETIREMENT','SPONSOR_REVENUE','OPERATING_COST',
-        'CONTRACT_EXPIRED','MARKET_SIGNING','JUNIOR_PROMOTION'
+        'CONTRACT_EXPIRED','MARKET_SIGNING','JUNIOR_PROMOTION','CAR_DEVELOPMENT'
     )),
     CONSTRAINT off_season_subject_kind_valid CHECK (subject_kind IN (
         'DRIVER','PERSONNEL','TEAM'
