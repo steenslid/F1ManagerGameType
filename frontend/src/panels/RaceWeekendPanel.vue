@@ -4,7 +4,7 @@ import { api } from '../api.js'
 import { useGame } from '../useGame.js'
 import { phaseLabel } from '../format.js'
 
-const { state, myTeam, inRaceWeekend, advanceLabel, advance } = useGame()
+const { state, myTeam, hasTeam, inRaceWeekend, advanceLabel, advance, refreshAll } = useGame()
 
 const loading = ref(false)
 const error = ref(null)
@@ -13,6 +13,13 @@ const practice = ref(null)   // PracticeViewDto
 const strategy = ref(null)   // StrategyViewDto
 const results = ref([])      // RaceResultDto[]
 const sprintResults = ref([])
+
+// Mid-season lineup (reserve / junior call-up), only between rounds.
+const lineup = ref(null)     // LineupDto
+const selectedOut = ref(null)
+const selectedIn = ref(null)
+const swapping = ref(false)
+const SOURCE_LABEL = { RESERVE: 'Reserve', ACADEMY: 'Academy', F2: 'F2', F3: 'F3', JUNIOR: 'Junior' }
 
 const FOCUS_OPTIONS = [
   { value: 'SETUP', label: 'Setup (+pace)' },
@@ -84,8 +91,38 @@ async function loadForStep() {
   }
 }
 
-onMounted(loadForStep)
-watch(() => [phase.value, state.currentRace?.raceId], loadForStep)
+async function loadLineup() {
+  if (phase.value !== 'BETWEEN_ROUNDS' || !hasTeam.value) { lineup.value = null; return }
+  try {
+    lineup.value = (await api.getLineup()).data
+  } catch (e) {
+    error.value = e.message || String(e)
+  }
+}
+
+async function doSwap() {
+  if (!selectedOut.value || !selectedIn.value) return
+  swapping.value = true
+  error.value = null
+  try {
+    lineup.value = (await api.swapLineup(selectedOut.value, selectedIn.value)).data
+    selectedOut.value = null
+    selectedIn.value = null
+    await refreshAll() // roster changed — refresh shared game state
+  } catch (e) {
+    error.value = e.message || String(e)
+  } finally {
+    swapping.value = false
+  }
+}
+
+function raceName(id) { return lineup.value?.raceDrivers.find((d) => d.driverId === id)?.name || '' }
+function candName(id) { return lineup.value?.callUpCandidates.find((d) => d.driverId === id)?.name || '' }
+
+function reload() { loadForStep(); loadLineup() }
+
+onMounted(reload)
+watch(() => [phase.value, state.currentRace?.raceId], reload)
 
 async function saveFocus(entry, focus) {
   error.value = null
@@ -128,7 +165,72 @@ function tyreClass(status) { return '' }
 
     <div v-if="error" class="error-banner">{{ error }}</div>
 
-    <div v-if="step === 'none'" class="empty-state">
+    <div v-if="phase === 'BETWEEN_ROUNDS'" class="lineup">
+      <p class="hint faint">
+        Between rounds you can call up a reserve or an F2/F3 junior (18+) to
+        replace one of your race drivers. The driver you bench becomes your
+        reserve and can be recalled later.
+      </p>
+      <div v-if="!hasTeam" class="faint p-20">Select a team to manage your lineup.</div>
+      <div v-else-if="!lineup" class="faint p-20">Loading lineup…</div>
+      <template v-else>
+        <div class="lineup-grid">
+          <div class="lineup-col">
+            <h3 class="section">Race seats</h3>
+            <div
+              v-for="d in lineup.raceDrivers" :key="d.driverId"
+              class="lu-card" :class="{ sel: selectedOut === d.driverId }"
+              @click="selectedOut = d.driverId"
+            >
+              <div class="lu-id">
+                <div class="lu-name">{{ d.name }}</div>
+                <div class="lu-sub faint">{{ d.nationality }} · {{ d.age }}y</div>
+              </div>
+              <div class="lu-stats">
+                <span class="lu-stat">PAC <b>{{ d.statPace }}</b></span>
+                <span class="lu-stat">QUA <b>{{ d.statQualifying }}</b></span>
+              </div>
+              <span v-if="selectedOut === d.driverId" class="lu-tag out">Bench</span>
+            </div>
+            <div v-if="!lineup.raceDrivers.length" class="faint p-20">No contracted race drivers.</div>
+          </div>
+
+          <div class="lineup-col">
+            <h3 class="section">Available to call up</h3>
+            <div
+              v-for="d in lineup.callUpCandidates" :key="d.driverId"
+              class="lu-card" :class="{ sel: selectedIn === d.driverId }"
+              @click="selectedIn = d.driverId"
+            >
+              <div class="lu-id">
+                <div class="lu-name">{{ d.name }} <span class="src">{{ SOURCE_LABEL[d.source] || d.source }}</span></div>
+                <div class="lu-sub faint">{{ d.nationality }} · {{ d.age }}y</div>
+              </div>
+              <div class="lu-stats">
+                <span class="lu-stat">PAC <b>{{ d.statPace }}</b></span>
+                <span class="lu-stat">QUA <b>{{ d.statQualifying }}</b></span>
+              </div>
+              <span v-if="selectedIn === d.driverId" class="lu-tag in">Call up</span>
+            </div>
+            <div v-if="!lineup.callUpCandidates.length" class="faint p-20">
+              No reserve or F2/F3 junior drivers are available to call up.
+            </div>
+          </div>
+        </div>
+
+        <div class="lu-actions">
+          <span class="faint" v-if="!selectedOut || !selectedIn">Pick a driver to bench and a driver to call up.</span>
+          <span v-else class="confirm-text">
+            Bench <b>{{ raceName(selectedOut) }}</b> and promote <b>{{ candName(selectedIn) }}</b> into the seat.
+          </span>
+          <button class="btn" :disabled="!selectedOut || !selectedIn || swapping" @click="doSwap">
+            {{ swapping ? 'Swapping…' : 'Confirm swap' }}
+          </button>
+        </div>
+      </template>
+    </div>
+
+    <div v-else-if="step === 'none'" class="empty-state">
       <div class="big">No active session</div>
       <p class="faint">It's currently <b>{{ phaseLabel(phase) }}</b>. Use Advance to move toward the next race weekend.</p>
     </div>
@@ -276,5 +378,28 @@ tr.me td { background: var(--accent-soft); }
 .dnf { margin-left: 6px; font-size: 11px; }
 .p-20 { padding: 20px; text-align: center; }
 .faint { color: var(--faint); }
+
+/* Mid-season lineup */
+.lineup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.lineup-col .section { margin-top: 0; }
+.lu-card {
+  display: flex; align-items: center; gap: 12px; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px;
+  margin-bottom: 8px; cursor: pointer; transition: .12s;
+}
+.lu-card:hover { border-color: var(--muted); }
+.lu-card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.lu-id { flex: 1; }
+.lu-name { font-weight: 700; font-size: 14px; }
+.src { font-size: 9px; text-transform: uppercase; letter-spacing: .5px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; margin-left: 6px; vertical-align: middle; }
+.lu-sub { font-size: 11px; margin-top: 1px; }
+.lu-stats { display: flex; gap: 10px; }
+.lu-stat { font-size: 10px; text-transform: uppercase; letter-spacing: .4px; color: var(--faint); }
+.lu-stat b { color: var(--fg); font-size: 13px; margin-left: 3px; }
+.lu-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 3px 8px; border-radius: 20px; }
+.lu-tag.out { background: #e0b34122; color: var(--warn); border: 1px solid #e0b34155; }
+.lu-tag.in { background: var(--accent-soft); color: #ff7066; border: 1px solid #e1060055; }
+.lu-actions { display: flex; align-items: center; justify-content: flex-end; gap: 16px; margin-top: 18px; border-top: 1px solid var(--line); padding-top: 16px; }
+.confirm-text { font-size: 13px; }
 </style>
 
