@@ -68,6 +68,35 @@ the user's repo should now contain all of them:
    `playerTeamDriverSalaryBill` (sum of the player's current racing-driver
    salaries) so cash minus bill shows spending headroom while offering.
    `DriverMarketService.readState` only; no schema change.
+15. `f2-ladder` (slice 1) — first cut of the driver ladder. SCHEMA CHANGE
+   (`JUNIOR_PROMOTION` added to the `off_season_events.event_type` CHECK) +
+   SEED CHANGE (2 F2 teams `rosso-junior`/`apex-academy`, 8 F2 drivers in
+   `teams.json`/`drivers.json`). New `OffSeasonService.promoteJuniors` runs as
+   the last OFF_SEASON step (after expirations): settles the F2 title by a
+   deterministic weighted-stat score + seeded noise (`JUNIOR_PROMO_SALT`),
+   then graduates the champion to F1 free agency (team affiliations nulled,
+   +3 pace/quali graduation boost) so they enter the upcoming DRIVER_MARKET
+   pool. Logged as a `JUNIOR_PROMOTION` event (shows in the off-season
+   report). Frontend: `TeamsPanel` now requests `?series=F1` so F2 feeders
+   don't pollute the constructors list; `HistoryPanel` styles the new event.
+   Follow-ups: F2 standings endpoint + ladder screen, per-year F2 intake
+   refill (pool currently shrinks by one champion per season), junior stat
+   growth, F3→F2 tier, promote top-N not just the champion.
+16. `lineup-callup` — mid-season reserve / junior call-up. New
+   `LineupService` + `LineupRoutes` (`GET /api/team/lineup`,
+   `POST /api/team/lineup/swap`), wired in Main/Server. Between rounds
+   (BETWEEN_ROUNDS phase) the player can bench one race driver and bring in any
+   driver NOT currently racing in F1, aged 18+ — a free agent, a reserve/
+   academy driver, or an F2/F3 junior (e.g. an experienced free agent veteran
+   replacing a rookie that flopped). Eligibility rule:
+   `current_racing_team_id IS NULL OR team.series IN ('F2','F3')`. The benched
+   driver is demoted to the team's reserve (`reserve_for_team_id`) and keeps
+   their contract so they can be recalled. No schema change, no RNG. Frontend:
+   RaceWeekendPanel shows a lineup manager during BETWEEN_ROUNDS (pick a driver
+   to bench + a call-up, confirm). Deliberately narrow per design: a contracted
+   F1 race driver can NOT be poached mid-season (that's the off-season market's
+   job — the NEXT planned slice: negotiate with ANY 18+ driver including those
+   under contract at rival F1 teams).
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
@@ -286,9 +315,12 @@ table on sprint weekends.
 - **News / events.** `event_templates`, `event_log`. Prerequisite eval,
   decision branching, effects application. Transition hooks become where
   events get emitted.
-- **F2 / F3.** Seeds for grids, per-series sim, junior promotion logic
-  (F2 champion → F1 seat). The series CHECK already permits F2/F3 but
-  nothing is seeded.
+- **F2 / F3.** Slice 1 landed (patch 15 `f2-ladder`): F2 grid seeded, the
+  champion is settled deterministically at off-season and promoted to F1 free
+  agency. Still to build: a real round-by-round F2 sim + standings endpoint +
+  ladder UI, a yearly F2 intake so the pool refills (it currently shrinks by
+  one per season), junior stat growth between seasons, an F3 tier feeding F2,
+  and promoting top-N rather than only the champion.
 
 ### Medium chunks — ~one round each
 
@@ -481,7 +513,19 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   the player skips a market entirely, they go into the season with
   empty seats and the race sim will run with however many drivers
   remain on their roster. Junior promotions (F2 → F1) are the proper
-  fix for filling player-skipped seats.
+  fix for filling player-skipped seats. Mid-season the player can also
+  call up a reserve/F2/F3 junior via `LineupService` (BETWEEN_ROUNDS),
+  but only the player team — AI teams don't call up reserves yet.
+- **Mid-season swaps: any non-F1 driver, no negotiation.** `LineupService.swap`
+  (patch 16) lets the player bench a race driver for any 18+ driver not
+  currently racing in F1 — free agents, the team's reserves, and F2/F3 juniors
+  — between rounds; the benched driver becomes the team's reserve. It still
+  can't poach a *contracted* F1 driver mid-season (off-season market's job).
+  There's no negotiation/cost gate: a free agent is hired at their existing
+  `current_salary` (which can be 0 for a freshly-promoted F2 champion → a free
+  signing until the next market sets a wage), and benching a contracted driver
+  carries no penalty (their salary just stops counting in the next PRE_SEASON
+  cost tick while they sit as reserve). AI teams never swap.
 - **Market state is global to the save.** Only one market can be active
   at a time (singleton tables). Fine for single-player, but means
   pausing mid-market and starting a new save can leave orphan offers
@@ -527,8 +571,14 @@ preservation. No client-side mirror of "loaded save" — query the backend.
 - **Seeded grid is fictional.** Real team/driver names are a licensing
   open question (design doc § "Open / Deferred Items").
 - **Frontend hardcodes** `BASE = 'http://localhost:7777'` in `api.js`.
-- **F2 / F3 entirely inert.** Schema permits the series; no seeds, no
-  sim, no promotion logic.
+- **F2 / F3 partially live.** F2 is seeded (2 teams, 8 drivers) and its
+  champion is promoted to F1 free agency each off-season (patch 15). There's
+  still no round-by-round F2 sim, no F2 standings endpoint/UI, no intake to
+  refill the grid (so it depletes by one champion per season), and F3 remains
+  inert. F2 teams are excluded from F1 views via series filters
+  (`series='F1'` on sim/market/standings queries; `TeamsPanel`/`TeamSelectPanel`
+  request F1 only). `GameService.selectTeam` has no series guard yet — the UI
+  just never offers an F2 team.
 - **Practice focus other than SETUP are no-ops.** TYRE_PROGRAM,
   RELIABILITY_CHECK, DEVELOPMENT_FEEDBACK affect nothing in v1.
 - **No-strategy default ≠ M_H.** A driver with no strategy entry gets

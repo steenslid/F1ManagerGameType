@@ -5,6 +5,7 @@ import f1sim.db.Database
 import f1sim.db.Migrations
 import f1sim.game.DriverMarketService
 import f1sim.game.GameService
+import f1sim.game.LineupService
 import f1sim.game.OffSeasonService
 import f1sim.game.RaceWeekendService
 import f1sim.game.StandingsService
@@ -34,6 +35,7 @@ fun main() {
     val gameService = GameService(db, offSeasonService, driverMarketService)
     val raceWeekendService = RaceWeekendService(db)
     val standingsService = StandingsService(db)
+    val lineupService = LineupService(db)
     val server = Server(
         config = config,
         db = db,
@@ -42,6 +44,7 @@ fun main() {
         raceWeekendService = raceWeekendService,
         standingsService = standingsService,
         driverMarketService = driverMarketService,
+        lineupService = lineupService,
     )
     server.start()
 

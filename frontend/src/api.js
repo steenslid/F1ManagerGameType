@@ -57,6 +57,11 @@ export const api = {
   setStrategy: (driverId, archetype) =>
     request('POST', '/api/race-weekend/strategy', { driverId, archetype }),
 
+  // Lineup (mid-season reserve / junior call-up)
+  getLineup: () => request('GET', '/api/team/lineup'),
+  swapLineup: (outDriverId, inDriverId) =>
+    request('POST', '/api/team/lineup/swap', { outDriverId, inDriverId }),
+
   // Standings
   getStandings: (filter) => request('GET', '/api/standings' + qs(filter)),
 

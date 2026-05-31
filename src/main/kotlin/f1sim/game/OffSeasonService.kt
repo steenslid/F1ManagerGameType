@@ -24,6 +24,8 @@ import kotlin.random.Random
  *     4. Contract expirations — non-retired drivers/personnel whose
  *        contract_expires_year <= ending year are released to free-agent
  *        state (team affiliations nulled, contract dates kept as history).
+ *     4c. Junior promotion — the F2 champion graduates to F1 free agency so
+ *        they join the upcoming driver market pool.
  *
  *   DRIVER_MARKET phase (not handled here; see DriverMarketService):
  *     5. Driver market — multi-round matching between free agents and
@@ -39,8 +41,9 @@ import kotlin.random.Random
  *     7. Operating cost tick — base_operating_cost + academy_investment +
  *        driver salaries + personnel salaries, set current_year_expenses.
  *
- * Remaining steps stubbed: personnel market, sponsor market, junior
- * promotions, regulation reset, board review, calendar generation.
+ * Remaining steps stubbed: personnel market, sponsor market, regulation
+ * reset, board review, calendar generation. (Junior promotion is a minimal
+ * first slice — single F2 champion, no feeder-grid refill yet.)
  *
  * All hooks write to `off_season_events` for the report. The whole pipeline
  * runs inside the GameService advance transaction.
@@ -72,13 +75,18 @@ class OffSeasonService(private val db: Database) {
         // Retirement nulls team affiliations, so an expired-contract retiree fails
         // the "has a team" predicate below and is skipped naturally.
         val expirationEvents = rollContractExpirations(conn, endingSeasonYear)
+        // Junior promotion runs last in the OFF_SEASON pipeline, after seats
+        // have opened via retirements/expirations. The F2 champion graduates
+        // to F1 free agency so they're in the pool when DRIVER_MARKET (the
+        // next phase) initializes.
+        val promotionEvents = promoteJuniors(conn, endingSeasonYear, masterSeed)
         // Driver market is no longer run here — it has its own phase
         // (DRIVER_MARKET) between OFF_SEASON and PRE_SEASON. See
         // DriverMarketService.
-        val total = ageEvents + retirementEvents + expirationEvents
+        val total = ageEvents + retirementEvents + expirationEvents + promotionEvents
         log.info(
-            "OFF_SEASON for ending year {}: {} aging, {} retirements, {} contract expirations",
-            endingSeasonYear, ageEvents, retirementEvents, expirationEvents,
+            "OFF_SEASON for ending year {}: {} aging, {} retirements, {} contract expirations, {} junior promotions",
+            endingSeasonYear, ageEvents, retirementEvents, expirationEvents, promotionEvents,
         )
         return total
     }
@@ -666,6 +674,126 @@ class OffSeasonService(private val db: Database) {
     }
 
     // ------------------------------------------------------------------
+    // Step 4c: Junior promotion (OFF_SEASON — the F2 ladder)
+    // ------------------------------------------------------------------
+
+    /**
+     * Promote the F2 champion into F1 free agency.
+     *
+     * The feeder series ("F2" teams) isn't run round-by-round; instead the
+     * championship is settled here at season's end by a deterministic score
+     * over each junior's race-craft stats plus a small seeded noise term, so
+     * the title isn't always the highest-rated prospect on paper. The winner
+     * graduates: their F2 seat is vacated (team affiliations nulled, so they
+     * become an F1 free agent), they get a small graduation stat bump to make
+     * them F1-viable, and they enter the upcoming DRIVER_MARKET pool where the
+     * player or an AI team can sign them.
+     *
+     * Runs after retirements + contract expirations so the graduate joins a
+     * pool that already reflects the freshly-opened seats. Determinism is
+     * keyed on the master seed + ending season year via [JUNIOR_PROMO_SALT];
+     * noise is drawn in a stable (id-sorted) order so replays match.
+     *
+     * Returns the number of drivers promoted (0 or 1 in v1 — single champion).
+     */
+    private fun promoteJuniors(conn: Connection, endingSeasonYear: Int, masterSeed: Long): Int {
+        data class Junior(
+            val id: UUID,
+            val name: String,
+            val teamName: String,
+            val pace: Int,
+            val qualifying: Int,
+            val consistency: Int,
+        )
+
+        val juniors = conn.prepareStatement(
+            """
+            SELECT d.id, d.name, t.name AS team_name,
+                   d.stat_pace, d.stat_qualifying, d.stat_consistency
+              FROM drivers d
+              JOIN teams t ON t.id = d.current_racing_team_id
+             WHERE NOT d.retired
+               AND t.series = 'F2'
+               AND d.current_age BETWEEN 18 AND 50
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            Junior(
+                                id = rs.getObject("id", UUID::class.java),
+                                name = rs.getString("name"),
+                                teamName = rs.getString("team_name"),
+                                pace = rs.getInt("stat_pace"),
+                                qualifying = rs.getInt("stat_qualifying"),
+                                consistency = rs.getInt("stat_consistency"),
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        if (juniors.isEmpty()) return 0
+
+        // Settle the F2 title: weighted race-craft score + seeded noise. Sort
+        // by id first so the per-junior noise draws happen in a stable order
+        // (replays of the same save produce the same champion).
+        val rng = Random(masterSeed xor JUNIOR_PROMO_SALT xor endingSeasonYear.toLong())
+        val champion = juniors
+            .sortedBy { it.id.toString() }
+            .map { j ->
+                val score = j.pace * 0.45 + j.qualifying * 0.30 +
+                    j.consistency * 0.25 + rng.nextDouble() * JUNIOR_TITLE_NOISE
+                j to score
+            }
+            .maxByOrNull { it.second }!!
+            .first
+
+        val boostedPace = (champion.pace + JUNIOR_GRADUATION_BOOST).coerceAtMost(100)
+        val boostedQuali = (champion.qualifying + JUNIOR_GRADUATION_BOOST).coerceAtMost(100)
+
+        conn.prepareStatement(
+            """
+            UPDATE drivers SET
+              current_racing_team_id = NULL,
+              reserve_for_team_id = NULL,
+              academy_team_id = NULL,
+              previous_team_id = NULL,
+              contract_expires_year = NULL,
+              contract_expires_round = NULL,
+              current_salary = 0,
+              stat_pace = ?,
+              stat_qualifying = ?,
+              morale = GREATEST(morale, 75)
+             WHERE id = ?
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.setInt(1, boostedPace)
+            stmt.setInt(2, boostedQuali)
+            stmt.setObject(3, champion.id)
+            stmt.executeUpdate()
+        }
+
+        logEvents(
+            conn, endingSeasonYear,
+            listOf(
+                EventToLog(
+                    "JUNIOR_PROMOTION", "DRIVER", champion.id.toString(), champion.name,
+                    "${champion.name} won the F2 title with ${champion.teamName} and graduates " +
+                        "to F1 as a free agent (pace ${champion.pace} → $boostedPace)",
+                )
+            ),
+        )
+        log.info(
+            "Junior promotion for ending year {}: {} graduated from F2 to F1 free agency",
+            endingSeasonYear, champion.name,
+        )
+        return 1
+    }
+
+    // ------------------------------------------------------------------
     // Step 4b: Sponsor renewals (PRE_SEASON — runs before revenue tick)
     // ------------------------------------------------------------------
 
@@ -1166,6 +1294,23 @@ class OffSeasonService(private val db: Database) {
     private companion object {
         const val RETIRE_SALT = 0x4E71_4E72_4E73_4E74L
         const val SPONSOR_RENEW_SALT = 0x53504F4E_524E5731L  // "SPON_RNW1"
+        const val JUNIOR_PROMO_SALT = 0x4A554E494F523231L    // "JUNIOR21"
+
+        /**
+         * Half-width-ish of the seeded noise added to each junior's F2 title
+         * score. Sized so the championship usually goes to one of the stronger
+         * prospects but can occasionally spring a surprise — the on-paper best
+         * isn't guaranteed the crown.
+         */
+        const val JUNIOR_TITLE_NOISE = 8.0
+
+        /**
+         * Stat bump (pace + qualifying) applied when an F2 champion graduates
+         * to F1. Small — a rookie should arrive raw and develop, not debut as
+         * a front-runner — but enough to lift the best juniors into the
+         * back-marker-rookie band where an F1 team might gamble on them.
+         */
+        const val JUNIOR_GRADUATION_BOOST = 3
 
         const val SPONSOR_RENEWAL_TERM_YEARS = 2
         const val MIN_RENEWAL_VALUE = 500_000L

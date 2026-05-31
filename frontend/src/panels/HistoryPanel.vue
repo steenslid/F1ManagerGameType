@@ -118,6 +118,7 @@ const reportCounts = computed(() => {
 function evClass(type) {
   if (type === 'RETIREMENT') return 'retire'
   if (type === 'MARKET_SIGNING') return 'sign'
+  if (type === 'JUNIOR_PROMOTION') return 'promote'
   if (type === 'CONTRACT_EXPIRED') return 'expire'
   if (type === 'SPONSOR_REVENUE' || type === 'FINANCE_SETTLED' || type === 'OPERATING_COST') return 'money'
   return ''
@@ -254,6 +255,7 @@ tr.me td { background: var(--accent-soft); }
 .ev-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); margin-top: 5px; flex: none; }
 .event.retire .ev-dot { background: var(--bad); }
 .event.sign .ev-dot { background: var(--good); }
+.event.promote .ev-dot { background: #b07cf0; }
 .event.expire .ev-dot { background: var(--warn); }
 .event.money .ev-dot { background: #5aa9e6; }
 .ev-msg { font-size: 13px; }

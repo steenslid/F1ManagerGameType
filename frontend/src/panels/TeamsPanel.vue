@@ -16,7 +16,8 @@ async function load() {
   isLoading.value = true
   error.value = null
   try {
-    const res = await api.listTeams()
+    // F1 constructors only — F2 feeder teams live on the ladder, not here.
+    const res = await api.listTeams({ series: 'F1' })
     teams.value = res.data || []
   } catch (e) {
     error.value = e.message || String(e)
