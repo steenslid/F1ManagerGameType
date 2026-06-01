@@ -113,32 +113,39 @@ class OffSeasonService(private val db: Database) {
     // ------------------------------------------------------------------
 
     /**
-     * Each F1 team's car drifts toward the performance level its R&D spend +
-     * technical capability can sustain. Self-balancing with inertia:
+     * Each F1 team develops three car areas — aero, chassis, powertrain —
+     * independently, each drifting toward the level its own R&D spend +
+     * technical capability sustains. Overall `car_performance` (what the sim
+     * reads) is the average of the three. Self-balancing with inertia:
      *
-     *   spendFactor = rd_budget / (rd_budget + REF_SPEND)        (0..1, saturating)
+     *   spendFactor = rd_area / (rd_area + REF_SPEND)            (0..1, saturating)
      *   tech        = TECH_BASE + TECH_SWING * regulation_understanding
      *   target      = FLOOR_TARGET + spendFactor * SPAN * tech   (clamped MIN..MAX)
-     *   new_car     = car + ADJUST_RATE * (target - car)
+     *   new_area    = area + ADJUST_RATE * (target - area)
      *
-     * A team that pours money in climbs over a few seasons; one that cuts R&D
-     * slides back toward the ~FLOOR_TARGET back-marker level as rivals develop.
-     * Deterministic (no RNG) — pure function of spend + reg understanding.
-     * Seeded `rd_budget` keeps the AI grid roughly stable; the player tunes
-     * their own via the R&D endpoint, trading cash for car performance.
+     * Pour money into an area to climb it over a few seasons; starve it and it
+     * slides toward the back as rivals develop. Deterministic (no RNG). Seeded
+     * per-area budgets keep the AI grid stable; the player tunes their own via
+     * the R&D endpoint, trading cash for performance area by area.
      */
     private fun runCarDevelopment(conn: Connection, newSeasonYear: Int): Int {
         data class Row(
             val teamId: String,
             val teamName: String,
             val oldCar: Int,
-            val rdBudget: Long,
+            val aero: Int,
+            val chassis: Int,
+            val powertrain: Int,
+            val rdAero: Long,
+            val rdChassis: Long,
+            val rdPowertrain: Long,
             val regUnderstanding: Double,
         )
 
         val rows = conn.prepareStatement(
             """
-            SELECT id, name, car_performance, rd_budget, regulation_understanding
+            SELECT id, name, car_performance, car_aero, car_chassis, car_powertrain,
+                   rd_aero, rd_chassis, rd_powertrain, regulation_understanding
               FROM teams
              WHERE series = 'F1'
             """.trimIndent()
@@ -151,7 +158,12 @@ class OffSeasonService(private val db: Database) {
                                 teamId = rs.getString("id"),
                                 teamName = rs.getString("name"),
                                 oldCar = rs.getInt("car_performance"),
-                                rdBudget = rs.getLong("rd_budget"),
+                                aero = rs.getInt("car_aero"),
+                                chassis = rs.getInt("car_chassis"),
+                                powertrain = rs.getInt("car_powertrain"),
+                                rdAero = rs.getLong("rd_aero"),
+                                rdChassis = rs.getLong("rd_chassis"),
+                                rdPowertrain = rs.getLong("rd_powertrain"),
                                 regUnderstanding = rs.getDouble("regulation_understanding"),
                             )
                         )
@@ -161,28 +173,47 @@ class OffSeasonService(private val db: Database) {
         }
         if (rows.isEmpty()) return 0
 
-        data class Update(val teamId: String, val teamName: String, val oldCar: Int, val newCar: Int, val target: Int, val rdBudget: Long)
-
-        val updates = rows.mapNotNull { r ->
-            val spend = r.rdBudget.toDouble()
+        // Develop one area toward what its budget + tech sustains.
+        fun develop(current: Int, budget: Long, tech: Double): Int {
+            val spend = budget.toDouble()
             val spendFactor = if (spend <= 0.0) 0.0 else spend / (spend + CAR_DEV_REF_SPEND)
-            val tech = CAR_DEV_TECH_BASE + CAR_DEV_TECH_SWING * r.regUnderstanding
             val target = (CAR_DEV_FLOOR_TARGET + spendFactor * CAR_DEV_SPAN * tech)
                 .coerceIn(CAR_DEV_MIN.toDouble(), CAR_DEV_MAX.toDouble())
-            val newCar = (r.oldCar + CAR_DEV_ADJUST_RATE * (target - r.oldCar))
+            return (current + CAR_DEV_ADJUST_RATE * (target - current))
                 .roundToInt()
                 .coerceIn(CAR_DEV_MIN, CAR_DEV_MAX)
-            if (newCar == r.oldCar) null
-            else Update(r.teamId, r.teamName, r.oldCar, newCar, target.roundToInt(), r.rdBudget)
+        }
+
+        data class Update(
+            val teamId: String, val teamName: String,
+            val oldCar: Int, val newCar: Int,
+            val aero: Int, val chassis: Int, val powertrain: Int,
+        )
+
+        val updates = rows.mapNotNull { r ->
+            val tech = CAR_DEV_TECH_BASE + CAR_DEV_TECH_SWING * r.regUnderstanding
+            val na = develop(r.aero, r.rdAero, tech)
+            val nc = develop(r.chassis, r.rdChassis, tech)
+            val np = develop(r.powertrain, r.rdPowertrain, tech)
+            val newCar = ((na + nc + np) / 3.0).roundToInt().coerceIn(CAR_DEV_MIN, CAR_DEV_MAX)
+            if (na == r.aero && nc == r.chassis && np == r.powertrain) null
+            else Update(r.teamId, r.teamName, r.oldCar, newCar, na, nc, np)
         }
         if (updates.isEmpty()) return 0
 
         conn.prepareStatement(
-            "UPDATE teams SET car_performance = ? WHERE id = ?"
+            """
+            UPDATE teams SET
+              car_aero = ?, car_chassis = ?, car_powertrain = ?, car_performance = ?
+             WHERE id = ?
+            """.trimIndent()
         ).use { stmt ->
             updates.forEach { u ->
-                stmt.setInt(1, u.newCar)
-                stmt.setString(2, u.teamId)
+                stmt.setInt(1, u.aero)
+                stmt.setInt(2, u.chassis)
+                stmt.setInt(3, u.powertrain)
+                stmt.setInt(4, u.newCar)
+                stmt.setString(5, u.teamId)
                 stmt.addBatch()
             }
             stmt.executeBatch()
@@ -195,7 +226,7 @@ class OffSeasonService(private val db: Database) {
                 EventToLog(
                     "CAR_DEVELOPMENT", "TEAM", u.teamId, u.teamName,
                     "${u.teamName}: car ${u.oldCar} $arrow ${u.newCar} " +
-                        "(R&D \$${u.rdBudget}/yr, sustains ~${u.target})",
+                        "(aero ${u.aero}, chassis ${u.chassis}, PU ${u.powertrain})",
                 )
             },
         )
@@ -287,14 +318,17 @@ class OffSeasonService(private val db: Database) {
     private fun ageDrivers(conn: Connection, seasonYear: Int): Int {
         data class Row(
             val id: UUID, val name: String,
-            val oldAge: Int, val newAge: Int,
-            val peakAge: Int, val declineRate: Double,
+            val oldAge: Int, val newAge: Int, val peakAge: Int,
             val oldPace: Int, val newPace: Int,
+            val oldQuali: Int, val newQuali: Int,
+            val newDevPool: Int,
+            val growing: Boolean,
         )
 
         val rows = conn.prepareStatement(
             """
-            SELECT id, name, current_age, trait_peak_age, trait_decline_rate, stat_pace
+            SELECT id, name, current_age, trait_peak_age, trait_decline_rate,
+                   stat_pace, stat_qualifying, development_pool
               FROM drivers
              WHERE NOT retired
             """.trimIndent()
@@ -309,13 +343,32 @@ class OffSeasonService(private val db: Database) {
                         val peakAge = rs.getInt("trait_peak_age")
                         val declineRate = rs.getDouble("trait_decline_rate")
                         val oldPace = rs.getInt("stat_pace")
-                        val newPace = if (newAge > peakAge) {
-                            val drop = (newAge - peakAge) * declineRate
-                            max(0, (oldPace - drop).roundToInt())
-                        } else {
-                            oldPace
+                        val oldQuali = rs.getInt("stat_qualifying")
+                        val devPool = rs.getInt("development_pool")
+
+                        val pastPeak = newAge > peakAge
+                        // A driver still at/under peak with a development budget
+                        // improves; how much depends on how much potential is
+                        // left. Burns the pool, so growth tapers off over time.
+                        val growth = if (!pastPeak && devPool > 0) {
+                            when {
+                                devPool >= 150 -> 2
+                                devPool >= 50 -> 1
+                                else -> 0
+                            }
+                        } else 0
+
+                        val newPace = when {
+                            pastPeak -> max(0, (oldPace - (newAge - peakAge) * declineRate).roundToInt())
+                            growth > 0 -> minOf(oldPace + growth, maxOf(oldPace, DRIVER_GROWTH_CAP))
+                            else -> oldPace
                         }
-                        add(Row(id, name, oldAge, newAge, peakAge, declineRate, oldPace, newPace))
+                        val newQuali = if (growth > 0) {
+                            minOf(oldQuali + growth, maxOf(oldQuali, DRIVER_GROWTH_CAP))
+                        } else oldQuali
+                        val newDevPool = if (growth > 0) max(0, devPool - DRIVER_GROWTH_POOL_BURN) else devPool
+
+                        add(Row(id, name, oldAge, newAge, peakAge, oldPace, newPace, oldQuali, newQuali, newDevPool, growth > 0))
                     }
                 }
             }
@@ -324,12 +377,14 @@ class OffSeasonService(private val db: Database) {
         if (rows.isEmpty()) return 0
 
         conn.prepareStatement(
-            "UPDATE drivers SET current_age = ?, stat_pace = ? WHERE id = ?"
+            "UPDATE drivers SET current_age = ?, stat_pace = ?, stat_qualifying = ?, development_pool = ? WHERE id = ?"
         ).use { stmt ->
             rows.forEach { r ->
                 stmt.setInt(1, r.newAge)
                 stmt.setInt(2, r.newPace)
-                stmt.setObject(3, r.id)
+                stmt.setInt(3, r.newQuali)
+                stmt.setInt(4, r.newDevPool)
+                stmt.setObject(5, r.id)
                 stmt.addBatch()
             }
             stmt.executeBatch()
@@ -341,10 +396,11 @@ class OffSeasonService(private val db: Database) {
                 "AGE_TICK", "DRIVER", r.id.toString(), r.name,
                 "${r.name}: age ${r.oldAge} → ${r.newAge}",
             )
-            if (r.newPace != r.oldPace) {
+            if (r.newPace != r.oldPace || r.newQuali != r.oldQuali) {
+                val note = if (r.growing) "developing" else "past peak ${r.peakAge}"
                 events += EventToLog(
                     "STAT_DRIFT", "DRIVER", r.id.toString(), r.name,
-                    "${r.name}: stat_pace ${r.oldPace} → ${r.newPace} (past peak ${r.peakAge})",
+                    "${r.name}: pace ${r.oldPace} → ${r.newPace}, quali ${r.oldQuali} → ${r.newQuali} ($note)",
                 )
             }
         }
@@ -770,54 +826,85 @@ class OffSeasonService(private val db: Database) {
     }
 
     // ------------------------------------------------------------------
-    // Step 4c: Junior promotion (OFF_SEASON — the F2 ladder)
+    // Step 4c: Junior promotion (OFF_SEASON — the F3 → F2 → F1 ladder)
     // ------------------------------------------------------------------
 
     /**
-     * Promote the F2 champion into F1 free agency.
+     * Settle the feeder-series titles and move the champions up the ladder:
+     *   - F2 champion → F1 free agency (enters the upcoming DRIVER_MARKET pool).
+     *   - F3 champion → F2 (slots into the F2 seat the graduate just vacated).
      *
-     * The feeder series ("F2" teams) isn't run round-by-round; instead the
-     * championship is settled here at season's end by a deterministic score
-     * over each junior's race-craft stats plus a small seeded noise term, so
-     * the title isn't always the highest-rated prospect on paper. The winner
-     * graduates: their F2 seat is vacated (team affiliations nulled, so they
-     * become an F1 free agent), they get a small graduation stat bump to make
-     * them F1-viable, and they enter the upcoming DRIVER_MARKET pool where the
-     * player or an AI team can sign them.
-     *
-     * Runs after retirements + contract expirations so the graduate joins a
-     * pool that already reflects the freshly-opened seats. Determinism is
-     * keyed on the master seed + ending season year via [JUNIOR_PROMO_SALT];
-     * noise is drawn in a stable (id-sorted) order so replays match.
-     *
-     * Returns the number of drivers promoted (0 or 1 in v1 — single champion).
+     * The feeders aren't run round-by-round; each title is decided here by a
+     * deterministic weighted race-craft score + small seeded noise (so the
+     * crown isn't always the best prospect on paper). Champions get a small
+     * graduation stat bump. F2 and F3 use distinct salts ([JUNIOR_PROMO_SALT],
+     * [JUNIOR_PROMO_SALT_F3]) so their draws are independent and the F2 result
+     * is unchanged from the single-tier version. Runs after retirements +
+     * contract expirations. Returns the number of drivers promoted (0–2).
      */
     private fun promoteJuniors(conn: Connection, endingSeasonYear: Int, masterSeed: Long): Int {
-        data class Junior(
-            val id: UUID,
-            val name: String,
-            val teamName: String,
-            val pace: Int,
-            val qualifying: Int,
-            val consistency: Int,
-        )
+        var count = 0
 
-        val juniors = conn.prepareStatement(
+        // F2 champion → F1 free agency. Must be 18+ so they're valid for the
+        // F1 driver market (which gates on age 18–50).
+        pickChampion(conn, "F2", masterSeed, endingSeasonYear, JUNIOR_PROMO_SALT, minAge = 18)?.let { champ ->
+            graduateToF1(conn, champ, endingSeasonYear)
+            count++
+        }
+
+        // F3 champion → F2 (no age floor; they're just moving up a feeder),
+        // slotting into whichever F2 team is now lightest (typically the seat
+        // the F2 graduate just vacated).
+        pickChampion(conn, "F3", masterSeed, endingSeasonYear, JUNIOR_PROMO_SALT_F3, minAge = 0)?.let { champ ->
+            val f2Team = pickLightestTeam(conn, "F2")
+            if (f2Team != null) {
+                promoteToF2(conn, champ, f2Team, endingSeasonYear)
+                count++
+            }
+        }
+
+        if (count > 0) {
+            log.info("Junior promotion for ending year {}: {} drivers moved up the ladder", endingSeasonYear, count)
+        }
+        return count
+    }
+
+    private data class Champion(
+        val id: UUID, val name: String, val teamName: String,
+        val pace: Int, val qualifying: Int,
+    )
+
+    /** Settle a feeder series' title deterministically and return its champion. */
+    private fun pickChampion(
+        conn: Connection,
+        series: String,
+        masterSeed: Long,
+        endingSeasonYear: Int,
+        salt: Long,
+        minAge: Int,
+    ): Champion? {
+        data class Entry(
+            val id: UUID, val name: String, val teamName: String,
+            val pace: Int, val qualifying: Int, val consistency: Int,
+        )
+        val entries = conn.prepareStatement(
             """
             SELECT d.id, d.name, t.name AS team_name,
                    d.stat_pace, d.stat_qualifying, d.stat_consistency
               FROM drivers d
               JOIN teams t ON t.id = d.current_racing_team_id
              WHERE NOT d.retired
-               AND t.series = 'F2'
-               AND d.current_age BETWEEN 18 AND 50
+               AND t.series = ?
+               AND d.current_age >= ?
             """.trimIndent()
         ).use { stmt ->
+            stmt.setString(1, series)
+            stmt.setInt(2, minAge)
             stmt.executeQuery().use { rs ->
                 buildList {
                     while (rs.next()) {
                         add(
-                            Junior(
+                            Entry(
                                 id = rs.getObject("id", UUID::class.java),
                                 name = rs.getString("name"),
                                 teamName = rs.getString("team_name"),
@@ -830,26 +917,50 @@ class OffSeasonService(private val db: Database) {
                 }
             }
         }
+        if (entries.isEmpty()) return null
 
-        if (juniors.isEmpty()) return 0
-
-        // Settle the F2 title: weighted race-craft score + seeded noise. Sort
-        // by id first so the per-junior noise draws happen in a stable order
+        // Sort by id first so per-driver noise draws happen in a stable order
         // (replays of the same save produce the same champion).
-        val rng = Random(masterSeed xor JUNIOR_PROMO_SALT xor endingSeasonYear.toLong())
-        val champion = juniors
+        val rng = Random(masterSeed xor salt xor endingSeasonYear.toLong())
+        val champ = entries
             .sortedBy { it.id.toString() }
-            .map { j ->
-                val score = j.pace * 0.45 + j.qualifying * 0.30 +
-                    j.consistency * 0.25 + rng.nextDouble() * JUNIOR_TITLE_NOISE
-                j to score
+            .map { e ->
+                val score = e.pace * 0.45 + e.qualifying * 0.30 +
+                    e.consistency * 0.25 + rng.nextDouble() * JUNIOR_TITLE_NOISE
+                e to score
             }
             .maxByOrNull { it.second }!!
             .first
+        return Champion(champ.id, champ.name, champ.teamName, champ.pace, champ.qualifying)
+    }
 
-        val boostedPace = (champion.pace + JUNIOR_GRADUATION_BOOST).coerceAtMost(100)
-        val boostedQuali = (champion.qualifying + JUNIOR_GRADUATION_BOOST).coerceAtMost(100)
+    /** The team in [series] with the fewest non-retired drivers (id tiebreak). */
+    private fun pickLightestTeam(conn: Connection, series: String): Pair<String, String>? {
+        return conn.prepareStatement(
+            """
+            SELECT t.id, t.name
+              FROM teams t
+              LEFT JOIN (
+                  SELECT current_racing_team_id, COUNT(*) AS cnt
+                    FROM drivers
+                   WHERE NOT retired AND current_racing_team_id IS NOT NULL
+                   GROUP BY current_racing_team_id
+              ) dc ON dc.current_racing_team_id = t.id
+             WHERE t.series = ?
+             ORDER BY COALESCE(dc.cnt, 0) ASC, t.id ASC
+             LIMIT 1
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.setString(1, series)
+            stmt.executeQuery().use { rs ->
+                if (!rs.next()) null else rs.getString("id") to rs.getString("name")
+            }
+        }
+    }
 
+    private fun graduateToF1(conn: Connection, champ: Champion, endingSeasonYear: Int) {
+        val boostedPace = (champ.pace + JUNIOR_GRADUATION_BOOST).coerceAtMost(100)
+        val boostedQuali = (champ.qualifying + JUNIOR_GRADUATION_BOOST).coerceAtMost(100)
         conn.prepareStatement(
             """
             UPDATE drivers SET
@@ -868,25 +979,61 @@ class OffSeasonService(private val db: Database) {
         ).use { stmt ->
             stmt.setInt(1, boostedPace)
             stmt.setInt(2, boostedQuali)
-            stmt.setObject(3, champion.id)
+            stmt.setObject(3, champ.id)
             stmt.executeUpdate()
         }
-
         logEvents(
             conn, endingSeasonYear,
             listOf(
                 EventToLog(
-                    "JUNIOR_PROMOTION", "DRIVER", champion.id.toString(), champion.name,
-                    "${champion.name} won the F2 title with ${champion.teamName} and graduates " +
-                        "to F1 as a free agent (pace ${champion.pace} → $boostedPace)",
+                    "JUNIOR_PROMOTION", "DRIVER", champ.id.toString(), champ.name,
+                    "${champ.name} won the F2 title with ${champ.teamName} and graduates " +
+                        "to F1 as a free agent (pace ${champ.pace} → $boostedPace)",
                 )
             ),
         )
-        log.info(
-            "Junior promotion for ending year {}: {} graduated from F2 to F1 free agency",
-            endingSeasonYear, champion.name,
+    }
+
+    private fun promoteToF2(
+        conn: Connection,
+        champ: Champion,
+        f2Team: Pair<String, String>,
+        endingSeasonYear: Int,
+    ) {
+        val boostedPace = (champ.pace + JUNIOR_GRADUATION_BOOST).coerceAtMost(100)
+        val boostedQuali = (champ.qualifying + JUNIOR_GRADUATION_BOOST).coerceAtMost(100)
+        conn.prepareStatement(
+            """
+            UPDATE drivers SET
+              current_racing_team_id = ?,
+              reserve_for_team_id = NULL,
+              academy_team_id = NULL,
+              previous_team_id = NULL,
+              contract_expires_year = NULL,
+              contract_expires_round = NULL,
+              current_salary = 0,
+              stat_pace = ?,
+              stat_qualifying = ?,
+              morale = GREATEST(morale, 75)
+             WHERE id = ?
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.setString(1, f2Team.first)
+            stmt.setInt(2, boostedPace)
+            stmt.setInt(3, boostedQuali)
+            stmt.setObject(4, champ.id)
+            stmt.executeUpdate()
+        }
+        logEvents(
+            conn, endingSeasonYear,
+            listOf(
+                EventToLog(
+                    "JUNIOR_PROMOTION", "DRIVER", champ.id.toString(), champ.name,
+                    "${champ.name} won the F3 title with ${champ.teamName} and was promoted " +
+                        "to F2 with ${f2Team.second} (pace ${champ.pace} → $boostedPace)",
+                )
+            ),
         )
-        return 1
     }
 
     // ------------------------------------------------------------------
@@ -1268,7 +1415,7 @@ class OffSeasonService(private val db: Database) {
                    t.current_year_expenses AS old_expenses,
                    t.base_operating_cost AS base_cost,
                    t.academy_investment AS academy_cost,
-                   t.rd_budget AS rd_cost,
+                   (t.rd_aero + t.rd_chassis + t.rd_powertrain) AS rd_cost,
                    COALESCE(driver_sum.salaries, 0) AS driver_salaries,
                    COALESCE(personnel_sum.salaries, 0) AS personnel_salaries
               FROM teams t
@@ -1404,6 +1551,7 @@ class OffSeasonService(private val db: Database) {
         const val RETIRE_SALT = 0x4E71_4E72_4E73_4E74L
         const val SPONSOR_RENEW_SALT = 0x53504F4E_524E5731L  // "SPON_RNW1"
         const val JUNIOR_PROMO_SALT = 0x4A554E494F523231L    // "JUNIOR21"
+        const val JUNIOR_PROMO_SALT_F3 = 0x4A554E494F523333L // "JUNIOR33"
 
         /**
          * Half-width-ish of the seeded noise added to each junior's F2 title
@@ -1420,6 +1568,16 @@ class OffSeasonService(private val db: Database) {
          * back-marker-rookie band where an F1 team might gamble on them.
          */
         const val JUNIOR_GRADUATION_BOOST = 3
+
+        /**
+         * Young-driver development: at/under peak age with development_pool
+         * left, pace + qualifying climb toward [DRIVER_GROWTH_CAP], burning
+         * [DRIVER_GROWTH_POOL_BURN] of the pool each season so growth tapers.
+         * Cap is below the elite ceiling so seeded stars stay special; growth
+         * never reduces an already-higher stat.
+         */
+        const val DRIVER_GROWTH_CAP = 92
+        const val DRIVER_GROWTH_POOL_BURN = 70
 
         const val SPONSOR_RENEWAL_TERM_YEARS = 2
         const val MIN_RENEWAL_VALUE = 500_000L
@@ -1446,8 +1604,8 @@ class OffSeasonService(private val db: Database) {
         const val SPONSOR_DEFECTION_MAX_PROB = 0.40
 
         // --- Car development (PRE_SEASON R&D tick) ---------------------
-        /** R&D spend at which spendFactor hits 0.5 (saturating curve). */
-        const val CAR_DEV_REF_SPEND = 60_000_000.0
+        /** Per-area R&D spend at which spendFactor hits 0.5 (saturating curve). */
+        const val CAR_DEV_REF_SPEND = 20_000_000.0
         /** tech = BASE + SWING * regulation_understanding → 0.7..1.3. */
         const val CAR_DEV_TECH_BASE = 0.7
         const val CAR_DEV_TECH_SWING = 0.6

@@ -22,10 +22,10 @@ const swapping = ref(false)
 const SOURCE_LABEL = { FREE_AGENT: 'Free agent', RESERVE: 'Reserve', ACADEMY: 'Academy', F2: 'F2', F3: 'F3', JUNIOR: 'Junior' }
 
 const FOCUS_OPTIONS = [
-  { value: 'SETUP', label: 'Setup (+pace)' },
-  { value: 'TYRE_PROGRAM', label: 'Tyre Program' },
-  { value: 'RELIABILITY_CHECK', label: 'Reliability Check' },
-  { value: 'DEVELOPMENT_FEEDBACK', label: 'Development Feedback' },
+  { value: 'SETUP', label: 'Balanced setup (+quali, +pace)' },
+  { value: 'TYRE_PROGRAM', label: 'Race trim (+race pace & steady, −quali)' },
+  { value: 'RELIABILITY_CHECK', label: 'Reliability (−DNF risk, a touch slower)' },
+  { value: 'DEVELOPMENT_FEEDBACK', label: 'Qualifying trim (+quali, riskier race)' },
 ]
 const ARCHETYPE_OPTIONS = [
   { value: 'M_H', label: 'Medium → Hard (safe)' },
@@ -241,11 +241,11 @@ function tyreClass(status) { return '' }
     <div v-else-if="loading" class="faint p-20">Loading session…</div>
 
     <div v-else-if="step === 'practice'">
-      <p class="hint faint">Set a practice focus for each of your drivers. <b>Setup</b> grants a small qualifying/pace boost; the others are placeholders for now.</p>
+      <p class="hint faint"><b class="req">Required:</b> set a practice focus for each of your drivers before you can advance to qualifying. Each is a trade-off — tune for one-lap qualifying pace, race-day pace, or reliability (fewer DNFs).</p>
       <div v-if="!myTeamId" class="faint p-20">Select a team first to set focus.</div>
       <div v-else class="driver-cards">
-        <div class="driver-card" v-for="e in myPracticeEntries" :key="e.driverId">
-          <div class="dc-head">{{ e.driverName }}</div>
+        <div class="driver-card" :class="{ unset: !e.focus }" v-for="e in myPracticeEntries" :key="e.driverId">
+          <div class="dc-head">{{ e.driverName }}<span v-if="!e.focus" class="needs">needs focus</span></div>
           <label>Practice Focus</label>
           <select :value="e.focus || ''" :disabled="!practice?.canEdit" @change="saveFocus(e, $event.target.value)">
             <option value="" disabled>Choose a focus…</option>
@@ -257,13 +257,14 @@ function tyreClass(status) { return '' }
     </div>
 
     <div v-else-if="step === 'strategy'">
-      <p class="hint faint">Pick a race strategy for each of your drivers. Grid positions appear once qualifying has been simulated.</p>
+      <p class="hint faint"><b class="req">Required:</b> pick a race strategy for each of your drivers before you can start the race. Grid positions appear once qualifying has been simulated.</p>
       <div v-if="!myTeamId" class="faint p-20">Select a team first to set strategy.</div>
       <div v-else class="driver-cards">
-        <div class="driver-card" v-for="e in myStrategyEntries" :key="e.driverId">
+        <div class="driver-card" :class="{ unset: !e.archetype }" v-for="e in myStrategyEntries" :key="e.driverId">
           <div class="dc-head">
             {{ e.driverName }}
             <span v-if="e.gridPosition" class="grid-pill">P{{ e.gridPosition }}</span>
+            <span v-if="!e.archetype" class="needs">needs strategy</span>
           </div>
           <label>Strategy</label>
           <select :value="e.archetype || ''" :disabled="!strategy?.canEdit" @change="saveStrategy(e, $event.target.value)">
@@ -359,6 +360,9 @@ function tyreClass(status) { return '' }
 
 .driver-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .driver-card { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 18px; }
+.driver-card.unset { border-color: var(--warn); }
+.req { color: var(--warn); }
+.needs { margin-left: auto; font-size: 9px; text-transform: uppercase; letter-spacing: .5px; color: var(--warn); border: 1px solid #e0b34155; border-radius: 4px; padding: 2px 6px; }
 .dc-head { font-size: 16px; font-weight: 700; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
 .grid-pill { background: var(--surface-2); color: var(--muted); border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 700; }
 .driver-card label { display: block; font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 600; margin-bottom: 6px; }

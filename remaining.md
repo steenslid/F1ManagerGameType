@@ -135,6 +135,56 @@ the user's repo should now contain all of them:
    toggle). New/renewed deals take effect from the next pre-season revenue
    tick. Follow-ups: new sponsor entrants over time, an upfront signing fee,
    and performance (WCC) bonuses to offer values.
+20. `practice-strategy-gate + f2-table` — (a) `GameService.advance` now refuses
+   to leave PRACTICE until every player race driver has a `practice_focus`, and
+   QUALIFYING until each has a `race_strategy` (throws BAD_STATE, surfaced on
+   the advance button; AI/empty seats unaffected, no player team = no gate).
+   RaceWeekendPanel flags unset drivers ("needs focus/strategy") and marks the
+   step Required. (b) New read route `GET /api/ladder/f2` (`LadderRoutes`)
+   returns the F2 grid ranked by composite rating; new `LadderPanel` (nav item
+   "Ladder", replacing the Academy stub) shows the table and flags the
+   projected promotion pick. No schema change.
+21. `f3-tier` — extends the ladder to F3 → F2 → F1. SEED CHANGE (2 F3 teams
+   `vortex-f3`/`crest-f3` + 8 F3 drivers, ages 16–19). `promoteJuniors`
+   generalized: F2 champion → F1 free agency (now gated 18+) AND F3 champion →
+   F2, slotting into the lightest F2 team (the seat the graduate vacated).
+   `pickChampion`/`graduateToF1`/`promoteToF2`/`pickLightestTeam` helpers;
+   distinct `JUNIOR_PROMO_SALT_F3` keeps F2 selection byte-identical.
+   `GET /api/ladder/{series}` now serves f2|f3; LadderPanel has an F2/F3
+   toggle. Still no in-series sim and no intake to refill F3 (it depletes one
+   champion/season). No schema change.
+22. `car-parts` — R&D split into three developable areas. SCHEMA CHANGE
+   (`teams.car_aero/car_chassis/car_powertrain` INT + `rd_aero/rd_chassis/
+   rd_powertrain` BIGINT). `car_performance` is now the average of the three
+   areas (sim reads it unchanged). `runCarDevelopment` develops each area from
+   its own budget (per-area `CAR_DEV_REF_SPEND` 20M) and recomputes the
+   average; operating-cost tick now charges the sum of the three; seeds split
+   the old sustaining spend evenly. `TeamRdService` + R&D panel reworked to
+   three per-area sliders. `rd_budget` column is now unused (superseded).
+23. `setup-tradeoffs` — the four practice focuses are now real risk/reward
+   setups (no schema change), folded into the sim in `GameService` via a
+   `FocusEffect` table (qualiMult, paceMult, consistencyDelta): SETUP balanced;
+   TYRE_PROGRAM race-trim (+pace/consistency, −quali); RELIABILITY_CHECK low-DNF
+   but slower; DEVELOPMENT_FEEDBACK qualifying-trim (+quali, −consistency, so a
+   riskier race). consistencyDelta shifts both race variance and the DNF roll.
+   RaceWeekendPanel labels/hint describe the trade-offs. (Main race + both
+   qualifying sessions use focus; the sprint *race* pace doesn't read focus.)
+24. `driver-growth` — young drivers now develop (no schema change). In the
+   OFF_SEASON aging tick, a driver at/under `trait_peak_age` with
+   `development_pool` left gains pace + qualifying toward `DRIVER_GROWTH_CAP`
+   (92), burning `DRIVER_GROWTH_POOL_BURN` (70) of the pool each season so
+   growth tapers. Past-peak drivers still decline. Makes F2/F3 graduates and
+   young signings (high seeded development_pool) appreciate into real talent —
+   scouting youth now pays off. Uses the previously-inert `development_pool`.
+25. `track-weighted-car` — the three car areas now matter *per track*. The
+   qualifying, race and sprint sims blend aero/chassis/powertrain into one
+   effective rating via `GameService.readCarWeights`/`weightedCar`, weighted by
+   the track's demands (powertrain ← top speed + accel, aero ← the cornering
+   phases, chassis ← braking + tyre wear; normalised). So a team's parts
+   profile plays to or against each venue, making where you spend R&D a
+   strategic call against the calendar. `car_performance` stays the displayed
+   overall (avg of the three); the sim now reads the per-track blend instead.
+   No schema change. Follow-up: a UI hint showing each track's favoured area.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
@@ -401,8 +451,11 @@ table on sprint weekends.
   offer values.
 - New sponsor entrants joining the pool yearly (current renewal stub
   only extends existing deals; the sponsor table stays static).
-- Aging stat drift for stats beyond `stat_pace` / `skill_design` (other
-  driver stats currently don't drift).
+- Young-driver growth (patch 24) now lifts `stat_pace` + `stat_qualifying`;
+  decline still only touches `stat_pace`. Other stats (consistency, overtaking,
+  etc.) and personnel skills beyond `skill_design` still don't drift. Driver
+  growth/decline events are logged as STAT_DRIFT but filtered as noise in the
+  UI feed — could surface a "development" highlight later.
 - Injuries / suspensions (post-race hook).
 - Custom team / custom engine option at save creation.
 - Driver champion bonus on FOM prize money (WDC team gets extra).
@@ -620,8 +673,10 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   (`series='F1'` on sim/market/standings queries; `TeamsPanel`/`TeamSelectPanel`
   request F1 only). `GameService.selectTeam` has no series guard yet — the UI
   just never offers an F2 team.
-- **Practice focus other than SETUP are no-ops.** TYRE_PROGRAM,
-  RELIABILITY_CHECK, DEVELOPMENT_FEEDBACK affect nothing in v1.
+- **Practice focuses are now real trade-offs** (patch 23) — each tilts
+  qualifying vs race pace vs reliability. The sprint *race* still doesn't read
+  focus (only its qualifying does); folding focus into the sprint pace query is
+  a small follow-up.
 - **No-strategy default ≠ M_H.** A driver with no strategy entry gets
   the neutral default in the sim (pace +0, sigma ×1.0). M_H specifically
   has sigma ×0.9. UI says "(default M-H)" — small lie.
