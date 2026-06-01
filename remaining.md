@@ -169,6 +169,13 @@ the user's repo should now contain all of them:
    riskier race). consistencyDelta shifts both race variance and the DNF roll.
    RaceWeekendPanel labels/hint describe the trade-offs. (Main race + both
    qualifying sessions use focus; the sprint *race* pace doesn't read focus.)
+24. `driver-growth` — young drivers now develop (no schema change). In the
+   OFF_SEASON aging tick, a driver at/under `trait_peak_age` with
+   `development_pool` left gains pace + qualifying toward `DRIVER_GROWTH_CAP`
+   (92), burning `DRIVER_GROWTH_POOL_BURN` (70) of the pool each season so
+   growth tapers. Past-peak drivers still decline. Makes F2/F3 graduates and
+   young signings (high seeded development_pool) appreciate into real talent —
+   scouting youth now pays off. Uses the previously-inert `development_pool`.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
@@ -435,8 +442,11 @@ table on sprint weekends.
   offer values.
 - New sponsor entrants joining the pool yearly (current renewal stub
   only extends existing deals; the sponsor table stays static).
-- Aging stat drift for stats beyond `stat_pace` / `skill_design` (other
-  driver stats currently don't drift).
+- Young-driver growth (patch 24) now lifts `stat_pace` + `stat_qualifying`;
+  decline still only touches `stat_pace`. Other stats (consistency, overtaking,
+  etc.) and personnel skills beyond `skill_design` still don't drift. Driver
+  growth/decline events are logged as STAT_DRIFT but filtered as noise in the
+  UI feed — could surface a "development" highlight later.
 - Injuries / suspensions (post-race hook).
 - Custom team / custom engine option at save creation.
 - Driver champion bonus on FOM prize money (WDC team gets extra).

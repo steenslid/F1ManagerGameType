@@ -318,14 +318,17 @@ class OffSeasonService(private val db: Database) {
     private fun ageDrivers(conn: Connection, seasonYear: Int): Int {
         data class Row(
             val id: UUID, val name: String,
-            val oldAge: Int, val newAge: Int,
-            val peakAge: Int, val declineRate: Double,
+            val oldAge: Int, val newAge: Int, val peakAge: Int,
             val oldPace: Int, val newPace: Int,
+            val oldQuali: Int, val newQuali: Int,
+            val newDevPool: Int,
+            val growing: Boolean,
         )
 
         val rows = conn.prepareStatement(
             """
-            SELECT id, name, current_age, trait_peak_age, trait_decline_rate, stat_pace
+            SELECT id, name, current_age, trait_peak_age, trait_decline_rate,
+                   stat_pace, stat_qualifying, development_pool
               FROM drivers
              WHERE NOT retired
             """.trimIndent()
@@ -340,13 +343,32 @@ class OffSeasonService(private val db: Database) {
                         val peakAge = rs.getInt("trait_peak_age")
                         val declineRate = rs.getDouble("trait_decline_rate")
                         val oldPace = rs.getInt("stat_pace")
-                        val newPace = if (newAge > peakAge) {
-                            val drop = (newAge - peakAge) * declineRate
-                            max(0, (oldPace - drop).roundToInt())
-                        } else {
-                            oldPace
+                        val oldQuali = rs.getInt("stat_qualifying")
+                        val devPool = rs.getInt("development_pool")
+
+                        val pastPeak = newAge > peakAge
+                        // A driver still at/under peak with a development budget
+                        // improves; how much depends on how much potential is
+                        // left. Burns the pool, so growth tapers off over time.
+                        val growth = if (!pastPeak && devPool > 0) {
+                            when {
+                                devPool >= 150 -> 2
+                                devPool >= 50 -> 1
+                                else -> 0
+                            }
+                        } else 0
+
+                        val newPace = when {
+                            pastPeak -> max(0, (oldPace - (newAge - peakAge) * declineRate).roundToInt())
+                            growth > 0 -> minOf(oldPace + growth, maxOf(oldPace, DRIVER_GROWTH_CAP))
+                            else -> oldPace
                         }
-                        add(Row(id, name, oldAge, newAge, peakAge, declineRate, oldPace, newPace))
+                        val newQuali = if (growth > 0) {
+                            minOf(oldQuali + growth, maxOf(oldQuali, DRIVER_GROWTH_CAP))
+                        } else oldQuali
+                        val newDevPool = if (growth > 0) max(0, devPool - DRIVER_GROWTH_POOL_BURN) else devPool
+
+                        add(Row(id, name, oldAge, newAge, peakAge, oldPace, newPace, oldQuali, newQuali, newDevPool, growth > 0))
                     }
                 }
             }
@@ -355,12 +377,14 @@ class OffSeasonService(private val db: Database) {
         if (rows.isEmpty()) return 0
 
         conn.prepareStatement(
-            "UPDATE drivers SET current_age = ?, stat_pace = ? WHERE id = ?"
+            "UPDATE drivers SET current_age = ?, stat_pace = ?, stat_qualifying = ?, development_pool = ? WHERE id = ?"
         ).use { stmt ->
             rows.forEach { r ->
                 stmt.setInt(1, r.newAge)
                 stmt.setInt(2, r.newPace)
-                stmt.setObject(3, r.id)
+                stmt.setInt(3, r.newQuali)
+                stmt.setInt(4, r.newDevPool)
+                stmt.setObject(5, r.id)
                 stmt.addBatch()
             }
             stmt.executeBatch()
@@ -372,10 +396,11 @@ class OffSeasonService(private val db: Database) {
                 "AGE_TICK", "DRIVER", r.id.toString(), r.name,
                 "${r.name}: age ${r.oldAge} → ${r.newAge}",
             )
-            if (r.newPace != r.oldPace) {
+            if (r.newPace != r.oldPace || r.newQuali != r.oldQuali) {
+                val note = if (r.growing) "developing" else "past peak ${r.peakAge}"
                 events += EventToLog(
                     "STAT_DRIFT", "DRIVER", r.id.toString(), r.name,
-                    "${r.name}: stat_pace ${r.oldPace} → ${r.newPace} (past peak ${r.peakAge})",
+                    "${r.name}: pace ${r.oldPace} → ${r.newPace}, quali ${r.oldQuali} → ${r.newQuali} ($note)",
                 )
             }
         }
@@ -1543,6 +1568,16 @@ class OffSeasonService(private val db: Database) {
          * back-marker-rookie band where an F1 team might gamble on them.
          */
         const val JUNIOR_GRADUATION_BOOST = 3
+
+        /**
+         * Young-driver development: at/under peak age with development_pool
+         * left, pace + qualifying climb toward [DRIVER_GROWTH_CAP], burning
+         * [DRIVER_GROWTH_POOL_BURN] of the pool each season so growth tapers.
+         * Cap is below the elite ceiling so seeded stars stay special; growth
+         * never reduces an already-higher stat.
+         */
+        const val DRIVER_GROWTH_CAP = 92
+        const val DRIVER_GROWTH_POOL_BURN = 70
 
         const val SPONSOR_RENEWAL_TERM_YEARS = 2
         const val MIN_RENEWAL_VALUE = 500_000L
