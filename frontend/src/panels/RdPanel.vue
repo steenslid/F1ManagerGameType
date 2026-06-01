@@ -6,12 +6,17 @@ import { fmtMoney, fmtMoneyFull } from '../format.js'
 
 const { refreshAll } = useGame()
 
-const state = ref(null)   // RdStateDto
-const draft = ref(0)      // slider value (dollars)
+const state = ref(null)
+const draft = ref({ aero: 0, chassis: 0, powertrain: 0 })
 const loading = ref(true)
 const saving = ref(false)
 const error = ref(null)
-const savedAt = ref(0)
+
+const AREAS = [
+  { key: 'aero', label: 'Aerodynamics', rating: 'carAero', budget: 'rdAero' },
+  { key: 'chassis', label: 'Chassis', rating: 'carChassis', budget: 'rdChassis' },
+  { key: 'powertrain', label: 'Powertrain', rating: 'carPowertrain', budget: 'rdPowertrain' },
+]
 
 onMounted(load)
 
@@ -20,7 +25,11 @@ async function load() {
   error.value = null
   try {
     state.value = (await api.getRd()).data
-    draft.value = Number(state.value?.rdBudget ?? 0)
+    draft.value = {
+      aero: Number(state.value?.rdAero ?? 0),
+      chassis: Number(state.value?.rdChassis ?? 0),
+      powertrain: Number(state.value?.rdPowertrain ?? 0),
+    }
   } catch (e) {
     error.value = e.message || String(e)
   } finally {
@@ -28,30 +37,38 @@ async function load() {
   }
 }
 
-const maxBudget = computed(() => Number(state.value?.maxBudget ?? 500_000_000))
+const maxPerArea = computed(() => Number(state.value?.maxPerArea ?? 200_000_000))
 const hasTeam = computed(() => !!state.value?.playerTeamId)
-const dirty = computed(() => Number(draft.value) !== Number(state.value?.rdBudget ?? 0))
+const totalSpend = computed(() => Number(draft.value.aero) + Number(draft.value.chassis) + Number(draft.value.powertrain))
+const dirty = computed(() =>
+  Number(draft.value.aero) !== Number(state.value?.rdAero ?? 0) ||
+  Number(draft.value.chassis) !== Number(state.value?.rdChassis ?? 0) ||
+  Number(draft.value.powertrain) !== Number(state.value?.rdPowertrain ?? 0)
+)
 
-// Cars develop toward roughly FLOOR + spend/(spend+REF) * SPAN * tech each
-// season. Mirror the backend's saturating shape (REF 60M, floor 45, span ~50,
-// tech ~1.0) so the player sees a rough "sustains ~N" hint as they drag.
-function sustainsHint(budget) {
-  const ref = 60_000_000
-  const spendFactor = budget <= 0 ? 0 : budget / (budget + ref)
-  return Math.round(45 + spendFactor * 50 * 1.0)
+// Mirror the backend's per-area saturating curve (ref 20M, floor 45, span 50).
+function sustains(budget) {
+  const ref = 20_000_000
+  const sf = budget <= 0 ? 0 : budget / (budget + ref)
+  return Math.round(45 + sf * 50)
 }
-
-const projected = computed(() => sustainsHint(Number(draft.value)))
 
 async function save() {
   if (!dirty.value) return
   saving.value = true
   error.value = null
   try {
-    state.value = (await api.setRd(Number(draft.value))).data
-    draft.value = Number(state.value?.rdBudget ?? 0)
-    savedAt.value = Date.now()
-    await refreshAll() // expenses change at the next pre-season tick
+    state.value = (await api.setRd({
+      aero: Number(draft.value.aero),
+      chassis: Number(draft.value.chassis),
+      powertrain: Number(draft.value.powertrain),
+    })).data
+    draft.value = {
+      aero: Number(state.value?.rdAero ?? 0),
+      chassis: Number(state.value?.rdChassis ?? 0),
+      powertrain: Number(state.value?.rdPowertrain ?? 0),
+    }
+    await refreshAll()
   } catch (e) {
     error.value = e.message || String(e)
   } finally {
@@ -73,45 +90,40 @@ function carClass(v) {
   <div v-if="loading" class="faint card empty">Loading R&amp;D…</div>
 
   <div v-else class="grid">
-    <!-- R&D control -->
+    <!-- Per-area development control -->
     <div class="card">
       <h2>Car development</h2>
       <div v-if="!hasTeam" class="faint empty">Select a team to manage its R&amp;D programme.</div>
       <template v-else>
-        <div class="headline">
-          <div class="metric">
-            <span class="mv num" :class="carClass(state.carPerformance)">{{ state.carPerformance }}</span>
-            <span class="ml">current car</span>
+        <div class="overall">
+          <span class="ov num" :class="carClass(state.carPerformance)">{{ state.carPerformance }}</span>
+          <span class="ovl">overall car · average of the three areas</span>
+        </div>
+
+        <div class="area" v-for="a in AREAS" :key="a.key">
+          <div class="area-head">
+            <span class="al">{{ a.label }}</span>
+            <span class="ar num" :class="carClass(state[a.rating])">{{ state[a.rating] }}</span>
           </div>
-          <div class="arrow">→</div>
-          <div class="metric">
-            <span class="mv num">{{ projected }}</span>
-            <span class="ml">this budget sustains</span>
+          <input class="slider" type="range" min="0" :max="maxPerArea" step="2500000" v-model.number="draft[a.key]" />
+          <div class="area-foot">
+            <span class="num">{{ fmtMoneyFull(draft[a.key]) }}/yr</span>
+            <span class="faint">sustains ~{{ sustains(Number(draft[a.key])) }}</span>
           </div>
         </div>
 
-        <label class="lbl">Annual R&amp;D budget</label>
-        <input
-          class="slider" type="range" min="0" :max="maxBudget" step="5000000"
-          v-model.number="draft"
-        />
-        <div class="budget-row">
-          <span class="bigmoney num">{{ fmtMoneyFull(draft) }}</span>
+        <div class="totals">
+          <div class="fin-row"><span class="k">Total R&amp;D spend</span><span class="v num">{{ fmtMoney(totalSpend) }}/yr</span></div>
+          <div class="fin-row"><span class="k">Cash reserves</span><span class="v num">{{ fmtMoney(state.cashReserves) }}</span></div>
           <button class="btn" :disabled="!dirty || saving" @click="save">
-            {{ saving ? 'Saving…' : dirty ? 'Set budget' : 'Saved' }}
+            {{ saving ? 'Saving…' : dirty ? 'Set budgets' : 'Saved' }}
           </button>
         </div>
-
-        <div class="fin">
-          <div class="fin-row"><span class="k">Cash reserves</span><span class="v num">{{ fmtMoney(state.cashReserves) }}</span></div>
-          <div class="fin-row"><span class="k">Current R&amp;D spend</span><span class="v num">{{ fmtMoney(state.rdBudget) }}/yr</span></div>
-        </div>
-
         <p class="note faint">
-          R&amp;D is charged to your operating costs each season and develops your
-          car over time — pour money in to climb the order, or cut back to bank
-          cash and slide toward the back of the grid as rivals push on. Changes
-          take effect from the next pre-season.
+          Each area develops toward what its budget + your technical capability
+          sustains. Concentrate spend to push one strength, or spread it for a
+          balanced car. R&amp;D is billed to operating costs; changes take effect
+          from the next pre-season.
         </p>
       </template>
     </div>
@@ -142,26 +154,25 @@ function carClass(v) {
 .card h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 0 0 14px; font-weight: 700; }
 .empty { padding: 10px 0; font-size: 13px; }
 
-.headline { display: flex; align-items: center; gap: 20px; margin-bottom: 18px; }
-.metric { display: flex; flex-direction: column; }
-.mv { font-size: 34px; font-weight: 800; line-height: 1; }
-.mv.good { color: var(--good); }
-.mv.elite { color: #ff7066; }
-.ml { font-size: 10px; text-transform: uppercase; letter-spacing: .6px; color: var(--faint); margin-top: 4px; }
-.arrow { font-size: 22px; color: var(--faint); }
+.overall { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.ov { font-size: 34px; font-weight: 800; line-height: 1; }
+.ov.good { color: var(--good); } .ov.elite { color: #ff7066; }
+.ovl { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--faint); }
 
-.lbl { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); font-weight: 600; margin-bottom: 8px; }
+.area { margin-bottom: 16px; }
+.area-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
+.al { font-size: 13px; font-weight: 700; }
+.ar { font-size: 18px; font-weight: 800; }
+.ar.good { color: var(--good); } .ar.elite { color: #ff7066; }
 .slider { width: 100%; accent-color: var(--accent); }
-.budget-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 16px; }
-.bigmoney { font-size: 20px; font-weight: 800; }
-.btn { background: var(--accent); color: #fff; border: none; padding: 9px 16px; border-radius: 8px; font-weight: 700; font-size: 13px; cursor: pointer; }
+.area-foot { display: flex; justify-content: space-between; font-size: 11px; margin-top: 2px; }
+
+.totals { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 4px; }
+.fin-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
+.fin-row .k { color: var(--muted); } .fin-row .v { font-weight: 700; }
+.btn { width: 100%; margin-top: 6px; background: var(--accent); color: #fff; border: none; padding: 10px; border-radius: 8px; font-weight: 700; font-size: 13px; cursor: pointer; }
 .btn:hover:not(:disabled) { filter: brightness(1.1); }
 .btn:disabled { opacity: .55; cursor: not-allowed; }
-
-.fin { border-top: 1px solid var(--line); padding-top: 12px; }
-.fin-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
-.fin-row .k { color: var(--muted); }
-.fin-row .v { font-weight: 700; }
 .note { font-size: 12px; line-height: 1.5; margin: 12px 0 0; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }

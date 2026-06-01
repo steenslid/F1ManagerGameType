@@ -151,6 +151,12 @@ CREATE TABLE teams (
     regulation_understanding        NUMERIC(3,2) NOT NULL DEFAULT 0.50,
     pit_crew_rating                 INT          NOT NULL DEFAULT 50,
     car_performance                 INT          NOT NULL DEFAULT 50,
+    car_aero                        INT          NOT NULL DEFAULT 50,
+    car_chassis                     INT          NOT NULL DEFAULT 50,
+    car_powertrain                  INT          NOT NULL DEFAULT 50,
+    rd_aero                         BIGINT       NOT NULL DEFAULT 0,
+    rd_chassis                      BIGINT       NOT NULL DEFAULT 0,
+    rd_powertrain                   BIGINT       NOT NULL DEFAULT 0,
 
     ai_aggression                   NUMERIC(3,2) NOT NULL DEFAULT 0.50,
     ai_ambition                     NUMERIC(3,2) NOT NULL DEFAULT 0.50,
@@ -167,7 +173,10 @@ CREATE TABLE teams (
     CONSTRAINT teams_cap_status_valid CHECK (cap_compliance_status IN ('COMPLIANT','WARNING','PENALISED')),
     CONSTRAINT teams_prestige_nonneg CHECK (prestige >= 0),
     CONSTRAINT teams_pit_crew_range CHECK (pit_crew_rating BETWEEN 0 AND 100),
-    CONSTRAINT teams_car_perf_range CHECK (car_performance BETWEEN 0 AND 100)
+    CONSTRAINT teams_car_perf_range CHECK (car_performance BETWEEN 0 AND 100),
+    CONSTRAINT teams_car_aero_range CHECK (car_aero BETWEEN 0 AND 100),
+    CONSTRAINT teams_car_chassis_range CHECK (car_chassis BETWEEN 0 AND 100),
+    CONSTRAINT teams_car_powertrain_range CHECK (car_powertrain BETWEEN 0 AND 100)
 );
 
 ALTER TABLE engine_suppliers

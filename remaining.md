@@ -153,6 +153,14 @@ the user's repo should now contain all of them:
    `GET /api/ladder/{series}` now serves f2|f3; LadderPanel has an F2/F3
    toggle. Still no in-series sim and no intake to refill F3 (it depletes one
    champion/season). No schema change.
+22. `car-parts` — R&D split into three developable areas. SCHEMA CHANGE
+   (`teams.car_aero/car_chassis/car_powertrain` INT + `rd_aero/rd_chassis/
+   rd_powertrain` BIGINT). `car_performance` is now the average of the three
+   areas (sim reads it unchanged). `runCarDevelopment` develops each area from
+   its own budget (per-area `CAR_DEV_REF_SPEND` 20M) and recomputes the
+   average; operating-cost tick now charges the sum of the three; seeds split
+   the old sustaining spend evenly. `TeamRdService` + R&D panel reworked to
+   three per-area sliders. `rd_budget` column is now unused (superseded).
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further

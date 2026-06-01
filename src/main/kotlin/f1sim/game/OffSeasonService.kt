@@ -113,32 +113,39 @@ class OffSeasonService(private val db: Database) {
     // ------------------------------------------------------------------
 
     /**
-     * Each F1 team's car drifts toward the performance level its R&D spend +
-     * technical capability can sustain. Self-balancing with inertia:
+     * Each F1 team develops three car areas — aero, chassis, powertrain —
+     * independently, each drifting toward the level its own R&D spend +
+     * technical capability sustains. Overall `car_performance` (what the sim
+     * reads) is the average of the three. Self-balancing with inertia:
      *
-     *   spendFactor = rd_budget / (rd_budget + REF_SPEND)        (0..1, saturating)
+     *   spendFactor = rd_area / (rd_area + REF_SPEND)            (0..1, saturating)
      *   tech        = TECH_BASE + TECH_SWING * regulation_understanding
      *   target      = FLOOR_TARGET + spendFactor * SPAN * tech   (clamped MIN..MAX)
-     *   new_car     = car + ADJUST_RATE * (target - car)
+     *   new_area    = area + ADJUST_RATE * (target - area)
      *
-     * A team that pours money in climbs over a few seasons; one that cuts R&D
-     * slides back toward the ~FLOOR_TARGET back-marker level as rivals develop.
-     * Deterministic (no RNG) — pure function of spend + reg understanding.
-     * Seeded `rd_budget` keeps the AI grid roughly stable; the player tunes
-     * their own via the R&D endpoint, trading cash for car performance.
+     * Pour money into an area to climb it over a few seasons; starve it and it
+     * slides toward the back as rivals develop. Deterministic (no RNG). Seeded
+     * per-area budgets keep the AI grid stable; the player tunes their own via
+     * the R&D endpoint, trading cash for performance area by area.
      */
     private fun runCarDevelopment(conn: Connection, newSeasonYear: Int): Int {
         data class Row(
             val teamId: String,
             val teamName: String,
             val oldCar: Int,
-            val rdBudget: Long,
+            val aero: Int,
+            val chassis: Int,
+            val powertrain: Int,
+            val rdAero: Long,
+            val rdChassis: Long,
+            val rdPowertrain: Long,
             val regUnderstanding: Double,
         )
 
         val rows = conn.prepareStatement(
             """
-            SELECT id, name, car_performance, rd_budget, regulation_understanding
+            SELECT id, name, car_performance, car_aero, car_chassis, car_powertrain,
+                   rd_aero, rd_chassis, rd_powertrain, regulation_understanding
               FROM teams
              WHERE series = 'F1'
             """.trimIndent()
@@ -151,7 +158,12 @@ class OffSeasonService(private val db: Database) {
                                 teamId = rs.getString("id"),
                                 teamName = rs.getString("name"),
                                 oldCar = rs.getInt("car_performance"),
-                                rdBudget = rs.getLong("rd_budget"),
+                                aero = rs.getInt("car_aero"),
+                                chassis = rs.getInt("car_chassis"),
+                                powertrain = rs.getInt("car_powertrain"),
+                                rdAero = rs.getLong("rd_aero"),
+                                rdChassis = rs.getLong("rd_chassis"),
+                                rdPowertrain = rs.getLong("rd_powertrain"),
                                 regUnderstanding = rs.getDouble("regulation_understanding"),
                             )
                         )
@@ -161,28 +173,47 @@ class OffSeasonService(private val db: Database) {
         }
         if (rows.isEmpty()) return 0
 
-        data class Update(val teamId: String, val teamName: String, val oldCar: Int, val newCar: Int, val target: Int, val rdBudget: Long)
-
-        val updates = rows.mapNotNull { r ->
-            val spend = r.rdBudget.toDouble()
+        // Develop one area toward what its budget + tech sustains.
+        fun develop(current: Int, budget: Long, tech: Double): Int {
+            val spend = budget.toDouble()
             val spendFactor = if (spend <= 0.0) 0.0 else spend / (spend + CAR_DEV_REF_SPEND)
-            val tech = CAR_DEV_TECH_BASE + CAR_DEV_TECH_SWING * r.regUnderstanding
             val target = (CAR_DEV_FLOOR_TARGET + spendFactor * CAR_DEV_SPAN * tech)
                 .coerceIn(CAR_DEV_MIN.toDouble(), CAR_DEV_MAX.toDouble())
-            val newCar = (r.oldCar + CAR_DEV_ADJUST_RATE * (target - r.oldCar))
+            return (current + CAR_DEV_ADJUST_RATE * (target - current))
                 .roundToInt()
                 .coerceIn(CAR_DEV_MIN, CAR_DEV_MAX)
-            if (newCar == r.oldCar) null
-            else Update(r.teamId, r.teamName, r.oldCar, newCar, target.roundToInt(), r.rdBudget)
+        }
+
+        data class Update(
+            val teamId: String, val teamName: String,
+            val oldCar: Int, val newCar: Int,
+            val aero: Int, val chassis: Int, val powertrain: Int,
+        )
+
+        val updates = rows.mapNotNull { r ->
+            val tech = CAR_DEV_TECH_BASE + CAR_DEV_TECH_SWING * r.regUnderstanding
+            val na = develop(r.aero, r.rdAero, tech)
+            val nc = develop(r.chassis, r.rdChassis, tech)
+            val np = develop(r.powertrain, r.rdPowertrain, tech)
+            val newCar = ((na + nc + np) / 3.0).roundToInt().coerceIn(CAR_DEV_MIN, CAR_DEV_MAX)
+            if (na == r.aero && nc == r.chassis && np == r.powertrain) null
+            else Update(r.teamId, r.teamName, r.oldCar, newCar, na, nc, np)
         }
         if (updates.isEmpty()) return 0
 
         conn.prepareStatement(
-            "UPDATE teams SET car_performance = ? WHERE id = ?"
+            """
+            UPDATE teams SET
+              car_aero = ?, car_chassis = ?, car_powertrain = ?, car_performance = ?
+             WHERE id = ?
+            """.trimIndent()
         ).use { stmt ->
             updates.forEach { u ->
-                stmt.setInt(1, u.newCar)
-                stmt.setString(2, u.teamId)
+                stmt.setInt(1, u.aero)
+                stmt.setInt(2, u.chassis)
+                stmt.setInt(3, u.powertrain)
+                stmt.setInt(4, u.newCar)
+                stmt.setString(5, u.teamId)
                 stmt.addBatch()
             }
             stmt.executeBatch()
@@ -195,7 +226,7 @@ class OffSeasonService(private val db: Database) {
                 EventToLog(
                     "CAR_DEVELOPMENT", "TEAM", u.teamId, u.teamName,
                     "${u.teamName}: car ${u.oldCar} $arrow ${u.newCar} " +
-                        "(R&D \$${u.rdBudget}/yr, sustains ~${u.target})",
+                        "(aero ${u.aero}, chassis ${u.chassis}, PU ${u.powertrain})",
                 )
             },
         )
@@ -1359,7 +1390,7 @@ class OffSeasonService(private val db: Database) {
                    t.current_year_expenses AS old_expenses,
                    t.base_operating_cost AS base_cost,
                    t.academy_investment AS academy_cost,
-                   t.rd_budget AS rd_cost,
+                   (t.rd_aero + t.rd_chassis + t.rd_powertrain) AS rd_cost,
                    COALESCE(driver_sum.salaries, 0) AS driver_salaries,
                    COALESCE(personnel_sum.salaries, 0) AS personnel_salaries
               FROM teams t
@@ -1538,8 +1569,8 @@ class OffSeasonService(private val db: Database) {
         const val SPONSOR_DEFECTION_MAX_PROB = 0.40
 
         // --- Car development (PRE_SEASON R&D tick) ---------------------
-        /** R&D spend at which spendFactor hits 0.5 (saturating curve). */
-        const val CAR_DEV_REF_SPEND = 60_000_000.0
+        /** Per-area R&D spend at which spendFactor hits 0.5 (saturating curve). */
+        const val CAR_DEV_REF_SPEND = 20_000_000.0
         /** tech = BASE + SWING * regulation_understanding → 0.7..1.3. */
         const val CAR_DEV_TECH_BASE = 0.7
         const val CAR_DEV_TECH_SWING = 0.6

@@ -62,9 +62,9 @@ export const api = {
   swapLineup: (outDriverId, inDriverId) =>
     request('POST', '/api/team/lineup/swap', { outDriverId, inDriverId }),
 
-  // Team R&D (car development budget)
+  // Team R&D (per-area car development budgets: { aero, chassis, powertrain })
   getRd: () => request('GET', '/api/team/rd'),
-  setRd: (budget) => request('POST', '/api/team/rd', { budget }),
+  setRd: (req) => request('POST', '/api/team/rd', req),
 
   // Sponsor market
   getSponsorMarket: () => request('GET', '/api/sponsors/market'),

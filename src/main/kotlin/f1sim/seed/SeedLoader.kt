@@ -461,29 +461,34 @@ class SeedLoader {
         val carUpdates = conn.prepareStatement(
             """
             UPDATE teams
-               SET car_performance =
-                   LEAST(100, GREATEST(0, ROUND(58 + (prestige - 70) * 0.96)::INT))
+               SET car_aero       = LEAST(100, GREATEST(0, ROUND(58 + (prestige - 70) * 0.96)::INT)),
+                   car_chassis    = LEAST(100, GREATEST(0, ROUND(58 + (prestige - 70) * 0.96)::INT)),
+                   car_powertrain = LEAST(100, GREATEST(0, ROUND(58 + (prestige - 70) * 0.96)::INT)),
+                   car_performance = LEAST(100, GREATEST(0, ROUND(58 + (prestige - 70) * 0.96)::INT))
              WHERE series = 'F1'
                AND car_performance = 50
             """.trimIndent()
         ).use { stmt -> stmt.executeUpdate() }
-        log.info("  derived: car_performance for {} teams", carUpdates)
+        log.info("  derived: car parts + performance for {} teams", carUpdates)
 
         // teams.rd_budget — seed each F1 team an R&D spend that roughly sustains
         // its starting car, scaled by prestige and ai_development_focus, so the
         // AI grid stays stable across seasons without an explicit AI R&D brain.
         // The player overrides their own via /api/team/rd. Only fill the
         // default (0).
+        // Split the sustaining R&D spend evenly across the three areas
+        // (≈ old total / 3 per area, so the per-area dev curve holds the seeded car).
         val rdUpdates = conn.prepareStatement(
             """
             UPDATE teams
-               SET rd_budget =
-                   GREATEST(0, ROUND((prestige - 50) * 2000000 * (0.5 + ai_development_focus))::BIGINT)
+               SET rd_aero       = GREATEST(0, ROUND((prestige - 50) * 2000000 * (0.5 + ai_development_focus) / 3)::BIGINT),
+                   rd_chassis    = GREATEST(0, ROUND((prestige - 50) * 2000000 * (0.5 + ai_development_focus) / 3)::BIGINT),
+                   rd_powertrain = GREATEST(0, ROUND((prestige - 50) * 2000000 * (0.5 + ai_development_focus) / 3)::BIGINT)
              WHERE series = 'F1'
-               AND rd_budget = 0
+               AND rd_aero = 0 AND rd_chassis = 0 AND rd_powertrain = 0
             """.trimIndent()
         ).use { stmt -> stmt.executeUpdate() }
-        log.info("  derived: rd_budget for {} teams", rdUpdates)
+        log.info("  derived: per-area R&D budgets for {} teams", rdUpdates)
 
         // drivers.current_salary — only fill where zero (don't clobber seeded values)
         val driverUpdates = conn.prepareStatement(
