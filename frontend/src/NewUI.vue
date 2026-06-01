@@ -15,6 +15,7 @@ import StandingsPanel from './panels/StandingsPanel.vue'
 import StaffPanel from './panels/StaffPanel.vue'
 import HistoryPanel from './panels/HistoryPanel.vue'
 import RdPanel from './panels/RdPanel.vue'
+import LadderPanel from './panels/LadderPanel.vue'
 import EventFeed from './panels/EventFeed.vue'
 
 const emit = defineEmits(['open-test-ui'])
@@ -38,9 +39,9 @@ const activePanel = ref('Dashboard')
 // Real screens first, then "coming soon" stubs for systems not built yet.
 const menuItems = [
   'Dashboard', 'Race Weekend', 'Schedule', 'Standings', 'Drivers', 'Staff',
-  'Market', 'R&D', 'Teams', 'History',
+  'Market', 'R&D', 'Ladder', 'Teams', 'History',
 ]
-const stubItems = ['Academy']
+const stubItems = []
 
 async function handleSaveLoaded() {
   await refreshAll()
@@ -139,16 +140,8 @@ function handleTeamSelected() {
         <StandingsPanel v-else-if="activePanel === 'Standings'" />
         <StaffPanel v-else-if="activePanel === 'Staff'" />
         <RdPanel v-else-if="activePanel === 'R&D'" />
+        <LadderPanel v-else-if="activePanel === 'Ladder'" />
         <HistoryPanel v-else-if="activePanel === 'History'" />
-        <div v-else-if="activePanel === 'Academy'" class="card placeholder">
-          <h2>Young Driver Academy</h2>
-          <p class="faint">
-            Junior single-seater feeders (F2 / F3), academy intakes and promotions
-            aren't simulated yet. Your team's academy budget is shown in Finance and
-            on the Dashboard; signing juniors will live here once the feeder series
-            are modelled.
-          </p>
-        </div>
         <div v-else class="card placeholder">
           <h2>{{ activePanel }}</h2>
           <p class="faint">This system isn't built yet — coming soon.</p>

@@ -135,6 +135,15 @@ the user's repo should now contain all of them:
    toggle). New/renewed deals take effect from the next pre-season revenue
    tick. Follow-ups: new sponsor entrants over time, an upfront signing fee,
    and performance (WCC) bonuses to offer values.
+20. `practice-strategy-gate + f2-table` — (a) `GameService.advance` now refuses
+   to leave PRACTICE until every player race driver has a `practice_focus`, and
+   QUALIFYING until each has a `race_strategy` (throws BAD_STATE, surfaced on
+   the advance button; AI/empty seats unaffected, no player team = no gate).
+   RaceWeekendPanel flags unset drivers ("needs focus/strategy") and marks the
+   step Required. (b) New read route `GET /api/ladder/f2` (`LadderRoutes`)
+   returns the F2 grid ranked by composite rating; new `LadderPanel` (nav item
+   "Ladder", replacing the Academy stub) shows the table and flags the
+   projected promotion pick. No schema change.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further

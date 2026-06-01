@@ -117,6 +117,7 @@ class GameService(
             conn.autoCommit = false
             try {
                 val before = readPhaseState(conn)
+                requireRaceWeekendDecisions(conn, before)
                 val roundsThisSeason = countRoundsInSeason(conn, before.year)
                 val isSprintWeekend = isSprintRound(conn, before.year, before.round)
 
@@ -385,6 +386,78 @@ class GameService(
             stmt.executeQuery().use { rs ->
                 return rs.next() && rs.getBoolean("fastest_lap_point")
             }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Pre-advance gates — force the player to make race-weekend decisions
+    // ------------------------------------------------------------------
+
+    /**
+     * The player can't skip the parts of a race weekend that are theirs to set:
+     * a practice focus for every one of their race drivers before leaving
+     * PRACTICE, and a race strategy before leaving QUALIFYING. AI teams and
+     * empty seats are unaffected. No player team selected → no gate.
+     *
+     * Throws IllegalStateException (mapped to 400 BAD_STATE) so the UI surfaces
+     * the message on the advance button.
+     */
+    private fun requireRaceWeekendDecisions(conn: Connection, state: GameState) {
+        val playerTeamId = readPlayerTeamIdOrNull(conn) ?: return
+        val raceId = lookupRaceAndSeed(conn, state.year, state.round)?.first ?: return
+        when (state.phase) {
+            Phase.PRACTICE -> {
+                val missing = countMissingDecisions(conn, raceId, playerTeamId, "practice_focus")
+                check(missing == 0) {
+                    "Set a practice focus for all your drivers before advancing " +
+                        "($missing still to set)."
+                }
+            }
+            Phase.QUALIFYING -> {
+                val missing = countMissingDecisions(conn, raceId, playerTeamId, "race_strategy")
+                check(missing == 0) {
+                    "Pick a race strategy for all your drivers before advancing " +
+                        "($missing still to set)."
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Count the player's active F1 race drivers with no row in the given
+     * race-weekend table for this race. The table name is a fixed internal
+     * constant ("practice_focus" | "race_strategy"), never user input.
+     */
+    private fun countMissingDecisions(
+        conn: Connection,
+        raceId: UUID,
+        playerTeamId: String,
+        table: String,
+    ): Int {
+        return conn.prepareStatement(
+            """
+            SELECT COUNT(*)
+              FROM drivers d
+              JOIN teams t ON t.id = d.current_racing_team_id
+             WHERE d.current_racing_team_id = ?
+               AND t.series = 'F1'
+               AND NOT d.retired
+               AND NOT EXISTS (
+                   SELECT 1 FROM $table x
+                    WHERE x.race_id = ? AND x.driver_id = d.id
+               )
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.setString(1, playerTeamId)
+            stmt.setObject(2, raceId)
+            stmt.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else 0 }
+        }
+    }
+
+    private fun readPlayerTeamIdOrNull(conn: Connection): String? {
+        return conn.prepareStatement("SELECT player_team_id FROM game").use { stmt ->
+            stmt.executeQuery().use { rs -> if (rs.next()) rs.getString("player_team_id") else null }
         }
     }
 

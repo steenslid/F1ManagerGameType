@@ -12,6 +12,7 @@ import f1sim.game.TeamRdService
 import f1sim.http.routes.DriverMarketRoutes
 import f1sim.http.routes.DriverRoutes
 import f1sim.http.routes.GameRoutes
+import f1sim.http.routes.LadderRoutes
 import f1sim.http.routes.LineupRoutes
 import f1sim.http.routes.OffSeasonRoutes
 import f1sim.http.routes.PersonnelRoutes
@@ -71,6 +72,7 @@ class Server(
         OffSeasonRoutes(db).register(app)
         DriverMarketRoutes(driverMarketService).register(app)
         LineupRoutes(lineupService).register(app)
+        LadderRoutes(db).register(app)
         TeamRdRoutes(teamRdService).register(app)
         SponsorMarketRoutes(sponsorMarketService).register(app)
         TeamSponsorshipRoutes(db).register(app)
