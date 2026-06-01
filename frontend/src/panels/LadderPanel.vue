@@ -1,47 +1,69 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { api } from '../api.js'
 
+const series = ref('f2') // 'f2' | 'f3'
 const standings = ref([])
 const loading = ref(true)
 const error = ref(null)
 
-onMounted(async () => {
+async function load() {
   loading.value = true
   error.value = null
   try {
-    standings.value = (await api.getF2Ladder()).data || []
+    standings.value = (await api.getLadder(series.value)).data || []
   } catch (e) {
     error.value = e.message || String(e)
   } finally {
     loading.value = false
   }
-})
+}
 
+function pick(s) {
+  if (series.value === s) return
+  series.value = s
+  load()
+}
+
+onMounted(load)
+
+const promotionNote = computed(() =>
+  series.value === 'f2'
+    ? 'At season’s end the F2 champion graduates to F1 free agency — sign them in the driver market, or call one up mid-season from Race Weekend.'
+    : 'At season’s end the F3 champion is promoted up to F2, one rung closer to Formula 1.'
+)
+
+// F3 ratings sit lower than F2 — shade thresholds accordingly.
 function ratingClass(r) {
-  if (r >= 70) return 'good'
-  if (r >= 64) return 'mid'
+  const hi = series.value === 'f2' ? 70 : 58
+  const mid = series.value === 'f2' ? 64 : 52
+  if (r >= hi) return 'good'
+  if (r >= mid) return 'mid'
   return ''
 }
 </script>
 
 <template>
-  <h1 class="page-title">Driver Ladder · F2</h1>
+  <div class="head">
+    <h1 class="page-title">Driver Ladder</h1>
+    <div class="tabs">
+      <button :class="{ active: series === 'f2' }" @click="pick('f2')">F2</button>
+      <button :class="{ active: series === 'f3' }" @click="pick('f3')">F3</button>
+    </div>
+  </div>
 
   <div class="card note">
     <span class="dot"></span>
     <p class="faint">
-      The F2 feeder grid. There's no round-by-round F2 sim yet, so this is a
-      projected order by driver rating. At season's end the F2 champion
-      <b>graduates to F1 free agency</b> — sign them in the driver market, or
-      call one up mid-season from Race Weekend when a seat opens.
+      The {{ series.toUpperCase() }} feeder grid — there's no round-by-round
+      sim yet, so this is a projected order by driver rating. {{ promotionNote }}
     </p>
   </div>
 
   <div v-if="error" class="error-banner">{{ error }}</div>
 
   <div class="card">
-    <h2>F2 standings</h2>
+    <h2>{{ series.toUpperCase() }} standings</h2>
     <div v-if="loading" class="faint empty">Loading…</div>
     <table v-else-if="standings.length">
       <thead>
@@ -70,7 +92,12 @@ function ratingClass(r) {
 </template>
 
 <style scoped>
-.page-title { font-size: 18px; margin: 4px 0 18px; font-weight: 700; }
+.head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.page-title { font-size: 18px; margin: 4px 0; font-weight: 700; }
+.tabs button { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 6px 16px; font-size: 12px; cursor: pointer; font-weight: 700; }
+.tabs button:first-child { border-radius: 6px 0 0 6px; border-right: none; }
+.tabs button:last-child { border-radius: 0 6px 6px 0; }
+.tabs button.active { background: var(--accent-soft); color: #ff7066; border-color: #e1060055; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
 .card + .card { margin-top: 16px; }
 .card h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 0 0 12px; font-weight: 700; }

@@ -770,54 +770,85 @@ class OffSeasonService(private val db: Database) {
     }
 
     // ------------------------------------------------------------------
-    // Step 4c: Junior promotion (OFF_SEASON — the F2 ladder)
+    // Step 4c: Junior promotion (OFF_SEASON — the F3 → F2 → F1 ladder)
     // ------------------------------------------------------------------
 
     /**
-     * Promote the F2 champion into F1 free agency.
+     * Settle the feeder-series titles and move the champions up the ladder:
+     *   - F2 champion → F1 free agency (enters the upcoming DRIVER_MARKET pool).
+     *   - F3 champion → F2 (slots into the F2 seat the graduate just vacated).
      *
-     * The feeder series ("F2" teams) isn't run round-by-round; instead the
-     * championship is settled here at season's end by a deterministic score
-     * over each junior's race-craft stats plus a small seeded noise term, so
-     * the title isn't always the highest-rated prospect on paper. The winner
-     * graduates: their F2 seat is vacated (team affiliations nulled, so they
-     * become an F1 free agent), they get a small graduation stat bump to make
-     * them F1-viable, and they enter the upcoming DRIVER_MARKET pool where the
-     * player or an AI team can sign them.
-     *
-     * Runs after retirements + contract expirations so the graduate joins a
-     * pool that already reflects the freshly-opened seats. Determinism is
-     * keyed on the master seed + ending season year via [JUNIOR_PROMO_SALT];
-     * noise is drawn in a stable (id-sorted) order so replays match.
-     *
-     * Returns the number of drivers promoted (0 or 1 in v1 — single champion).
+     * The feeders aren't run round-by-round; each title is decided here by a
+     * deterministic weighted race-craft score + small seeded noise (so the
+     * crown isn't always the best prospect on paper). Champions get a small
+     * graduation stat bump. F2 and F3 use distinct salts ([JUNIOR_PROMO_SALT],
+     * [JUNIOR_PROMO_SALT_F3]) so their draws are independent and the F2 result
+     * is unchanged from the single-tier version. Runs after retirements +
+     * contract expirations. Returns the number of drivers promoted (0–2).
      */
     private fun promoteJuniors(conn: Connection, endingSeasonYear: Int, masterSeed: Long): Int {
-        data class Junior(
-            val id: UUID,
-            val name: String,
-            val teamName: String,
-            val pace: Int,
-            val qualifying: Int,
-            val consistency: Int,
-        )
+        var count = 0
 
-        val juniors = conn.prepareStatement(
+        // F2 champion → F1 free agency. Must be 18+ so they're valid for the
+        // F1 driver market (which gates on age 18–50).
+        pickChampion(conn, "F2", masterSeed, endingSeasonYear, JUNIOR_PROMO_SALT, minAge = 18)?.let { champ ->
+            graduateToF1(conn, champ, endingSeasonYear)
+            count++
+        }
+
+        // F3 champion → F2 (no age floor; they're just moving up a feeder),
+        // slotting into whichever F2 team is now lightest (typically the seat
+        // the F2 graduate just vacated).
+        pickChampion(conn, "F3", masterSeed, endingSeasonYear, JUNIOR_PROMO_SALT_F3, minAge = 0)?.let { champ ->
+            val f2Team = pickLightestTeam(conn, "F2")
+            if (f2Team != null) {
+                promoteToF2(conn, champ, f2Team, endingSeasonYear)
+                count++
+            }
+        }
+
+        if (count > 0) {
+            log.info("Junior promotion for ending year {}: {} drivers moved up the ladder", endingSeasonYear, count)
+        }
+        return count
+    }
+
+    private data class Champion(
+        val id: UUID, val name: String, val teamName: String,
+        val pace: Int, val qualifying: Int,
+    )
+
+    /** Settle a feeder series' title deterministically and return its champion. */
+    private fun pickChampion(
+        conn: Connection,
+        series: String,
+        masterSeed: Long,
+        endingSeasonYear: Int,
+        salt: Long,
+        minAge: Int,
+    ): Champion? {
+        data class Entry(
+            val id: UUID, val name: String, val teamName: String,
+            val pace: Int, val qualifying: Int, val consistency: Int,
+        )
+        val entries = conn.prepareStatement(
             """
             SELECT d.id, d.name, t.name AS team_name,
                    d.stat_pace, d.stat_qualifying, d.stat_consistency
               FROM drivers d
               JOIN teams t ON t.id = d.current_racing_team_id
              WHERE NOT d.retired
-               AND t.series = 'F2'
-               AND d.current_age BETWEEN 18 AND 50
+               AND t.series = ?
+               AND d.current_age >= ?
             """.trimIndent()
         ).use { stmt ->
+            stmt.setString(1, series)
+            stmt.setInt(2, minAge)
             stmt.executeQuery().use { rs ->
                 buildList {
                     while (rs.next()) {
                         add(
-                            Junior(
+                            Entry(
                                 id = rs.getObject("id", UUID::class.java),
                                 name = rs.getString("name"),
                                 teamName = rs.getString("team_name"),
@@ -830,26 +861,50 @@ class OffSeasonService(private val db: Database) {
                 }
             }
         }
+        if (entries.isEmpty()) return null
 
-        if (juniors.isEmpty()) return 0
-
-        // Settle the F2 title: weighted race-craft score + seeded noise. Sort
-        // by id first so the per-junior noise draws happen in a stable order
+        // Sort by id first so per-driver noise draws happen in a stable order
         // (replays of the same save produce the same champion).
-        val rng = Random(masterSeed xor JUNIOR_PROMO_SALT xor endingSeasonYear.toLong())
-        val champion = juniors
+        val rng = Random(masterSeed xor salt xor endingSeasonYear.toLong())
+        val champ = entries
             .sortedBy { it.id.toString() }
-            .map { j ->
-                val score = j.pace * 0.45 + j.qualifying * 0.30 +
-                    j.consistency * 0.25 + rng.nextDouble() * JUNIOR_TITLE_NOISE
-                j to score
+            .map { e ->
+                val score = e.pace * 0.45 + e.qualifying * 0.30 +
+                    e.consistency * 0.25 + rng.nextDouble() * JUNIOR_TITLE_NOISE
+                e to score
             }
             .maxByOrNull { it.second }!!
             .first
+        return Champion(champ.id, champ.name, champ.teamName, champ.pace, champ.qualifying)
+    }
 
-        val boostedPace = (champion.pace + JUNIOR_GRADUATION_BOOST).coerceAtMost(100)
-        val boostedQuali = (champion.qualifying + JUNIOR_GRADUATION_BOOST).coerceAtMost(100)
+    /** The team in [series] with the fewest non-retired drivers (id tiebreak). */
+    private fun pickLightestTeam(conn: Connection, series: String): Pair<String, String>? {
+        return conn.prepareStatement(
+            """
+            SELECT t.id, t.name
+              FROM teams t
+              LEFT JOIN (
+                  SELECT current_racing_team_id, COUNT(*) AS cnt
+                    FROM drivers
+                   WHERE NOT retired AND current_racing_team_id IS NOT NULL
+                   GROUP BY current_racing_team_id
+              ) dc ON dc.current_racing_team_id = t.id
+             WHERE t.series = ?
+             ORDER BY COALESCE(dc.cnt, 0) ASC, t.id ASC
+             LIMIT 1
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.setString(1, series)
+            stmt.executeQuery().use { rs ->
+                if (!rs.next()) null else rs.getString("id") to rs.getString("name")
+            }
+        }
+    }
 
+    private fun graduateToF1(conn: Connection, champ: Champion, endingSeasonYear: Int) {
+        val boostedPace = (champ.pace + JUNIOR_GRADUATION_BOOST).coerceAtMost(100)
+        val boostedQuali = (champ.qualifying + JUNIOR_GRADUATION_BOOST).coerceAtMost(100)
         conn.prepareStatement(
             """
             UPDATE drivers SET
@@ -868,25 +923,61 @@ class OffSeasonService(private val db: Database) {
         ).use { stmt ->
             stmt.setInt(1, boostedPace)
             stmt.setInt(2, boostedQuali)
-            stmt.setObject(3, champion.id)
+            stmt.setObject(3, champ.id)
             stmt.executeUpdate()
         }
-
         logEvents(
             conn, endingSeasonYear,
             listOf(
                 EventToLog(
-                    "JUNIOR_PROMOTION", "DRIVER", champion.id.toString(), champion.name,
-                    "${champion.name} won the F2 title with ${champion.teamName} and graduates " +
-                        "to F1 as a free agent (pace ${champion.pace} → $boostedPace)",
+                    "JUNIOR_PROMOTION", "DRIVER", champ.id.toString(), champ.name,
+                    "${champ.name} won the F2 title with ${champ.teamName} and graduates " +
+                        "to F1 as a free agent (pace ${champ.pace} → $boostedPace)",
                 )
             ),
         )
-        log.info(
-            "Junior promotion for ending year {}: {} graduated from F2 to F1 free agency",
-            endingSeasonYear, champion.name,
+    }
+
+    private fun promoteToF2(
+        conn: Connection,
+        champ: Champion,
+        f2Team: Pair<String, String>,
+        endingSeasonYear: Int,
+    ) {
+        val boostedPace = (champ.pace + JUNIOR_GRADUATION_BOOST).coerceAtMost(100)
+        val boostedQuali = (champ.qualifying + JUNIOR_GRADUATION_BOOST).coerceAtMost(100)
+        conn.prepareStatement(
+            """
+            UPDATE drivers SET
+              current_racing_team_id = ?,
+              reserve_for_team_id = NULL,
+              academy_team_id = NULL,
+              previous_team_id = NULL,
+              contract_expires_year = NULL,
+              contract_expires_round = NULL,
+              current_salary = 0,
+              stat_pace = ?,
+              stat_qualifying = ?,
+              morale = GREATEST(morale, 75)
+             WHERE id = ?
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.setString(1, f2Team.first)
+            stmt.setInt(2, boostedPace)
+            stmt.setInt(3, boostedQuali)
+            stmt.setObject(4, champ.id)
+            stmt.executeUpdate()
+        }
+        logEvents(
+            conn, endingSeasonYear,
+            listOf(
+                EventToLog(
+                    "JUNIOR_PROMOTION", "DRIVER", champ.id.toString(), champ.name,
+                    "${champ.name} won the F3 title with ${champ.teamName} and was promoted " +
+                        "to F2 with ${f2Team.second} (pace ${champ.pace} → $boostedPace)",
+                )
+            ),
         )
-        return 1
     }
 
     // ------------------------------------------------------------------
@@ -1404,6 +1495,7 @@ class OffSeasonService(private val db: Database) {
         const val RETIRE_SALT = 0x4E71_4E72_4E73_4E74L
         const val SPONSOR_RENEW_SALT = 0x53504F4E_524E5731L  // "SPON_RNW1"
         const val JUNIOR_PROMO_SALT = 0x4A554E494F523231L    // "JUNIOR21"
+        const val JUNIOR_PROMO_SALT_F3 = 0x4A554E494F523333L // "JUNIOR33"
 
         /**
          * Half-width-ish of the seeded noise added to each junior's F2 title

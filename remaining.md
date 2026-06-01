@@ -144,6 +144,15 @@ the user's repo should now contain all of them:
    returns the F2 grid ranked by composite rating; new `LadderPanel` (nav item
    "Ladder", replacing the Academy stub) shows the table and flags the
    projected promotion pick. No schema change.
+21. `f3-tier` — extends the ladder to F3 → F2 → F1. SEED CHANGE (2 F3 teams
+   `vortex-f3`/`crest-f3` + 8 F3 drivers, ages 16–19). `promoteJuniors`
+   generalized: F2 champion → F1 free agency (now gated 18+) AND F3 champion →
+   F2, slotting into the lightest F2 team (the seat the graduate vacated).
+   `pickChampion`/`graduateToF1`/`promoteToF2`/`pickLightestTeam` helpers;
+   distinct `JUNIOR_PROMO_SALT_F3` keeps F2 selection byte-identical.
+   `GET /api/ladder/{series}` now serves f2|f3; LadderPanel has an F2/F3
+   toggle. Still no in-series sim and no intake to refill F3 (it depletes one
+   champion/season). No schema change.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further

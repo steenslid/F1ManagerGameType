@@ -72,8 +72,8 @@ export const api = {
   renewSponsor: (req) => request('POST', '/api/sponsors/market/renew', req),
   cancelSponsor: (dealId) => request('POST', '/api/sponsors/market/cancel', { dealId }),
 
-  // Ladder (F2 feeder grid)
-  getF2Ladder: () => request('GET', '/api/ladder/f2'),
+  // Ladder (feeder grids: 'f2' | 'f3')
+  getLadder: (series) => request('GET', `/api/ladder/${series}`),
 
   // Standings
   getStandings: (filter) => request('GET', '/api/standings' + qs(filter)),

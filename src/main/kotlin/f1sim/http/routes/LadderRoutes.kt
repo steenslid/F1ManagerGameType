@@ -2,6 +2,7 @@ package f1sim.http.routes
 
 import f1sim.db.Database
 import f1sim.http.Envelope
+import f1sim.http.NotFoundException
 import f1sim.http.timed
 import f1sim.save.SaveSession
 import io.javalin.Javalin
@@ -12,7 +13,7 @@ import java.util.UUID
 import kotlin.math.roundToInt
 
 /**
- * /api/ladder/f2 — the F2 feeder grid, ranked.
+ * /api/ladder/{series} — a feeder grid (f2 or f3), ranked.
  *
  * There's no round-by-round F2 sim yet, so the "table" is a projected order:
  * each junior's composite rating (the same weighted race-craft blend the
@@ -37,11 +38,15 @@ class LadderRoutes(private val db: Database) {
     )
 
     fun register(app: Javalin) {
-        app.get("/api/ladder/f2", ::f2)
+        app.get("/api/ladder/{series}", ::standings)
     }
 
-    private fun f2(ctx: Context) = ctx.timed {
+    private fun standings(ctx: Context) = ctx.timed {
         SaveSession.requireLoaded()
+        val series = ctx.pathParam("series").uppercase()
+        if (series != "F2" && series != "F3") {
+            throw NotFoundException("Unknown ladder series '$series' (expected f2 or f3)")
+        }
         val rows = db.withConnection { conn ->
             conn.prepareStatement(
                 """
@@ -50,10 +55,11 @@ class LadderRoutes(private val db: Database) {
                        d.stat_pace, d.stat_qualifying, d.stat_consistency
                   FROM drivers d
                   JOIN teams t ON t.id = d.current_racing_team_id
-                 WHERE t.series = 'F2'
+                 WHERE t.series = ?
                    AND NOT d.retired
                 """.trimIndent()
             ).use { stmt ->
+                stmt.setString(1, series)
                 stmt.executeQuery().use { rs ->
                     buildList {
                         while (rs.next()) {
