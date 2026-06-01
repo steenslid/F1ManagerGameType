@@ -176,6 +176,15 @@ the user's repo should now contain all of them:
    growth tapers. Past-peak drivers still decline. Makes F2/F3 graduates and
    young signings (high seeded development_pool) appreciate into real talent —
    scouting youth now pays off. Uses the previously-inert `development_pool`.
+25. `track-weighted-car` — the three car areas now matter *per track*. The
+   qualifying, race and sprint sims blend aero/chassis/powertrain into one
+   effective rating via `GameService.readCarWeights`/`weightedCar`, weighted by
+   the track's demands (powertrain ← top speed + accel, aero ← the cornering
+   phases, chassis ← braking + tyre wear; normalised). So a team's parts
+   profile plays to or against each venue, making where you spend R&D a
+   strategic call against the calendar. `car_performance` stays the displayed
+   overall (avg of the three); the sim now reads the per-track blend instead.
+   No schema change. Follow-up: a UI hint showing each track's favoured area.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further

@@ -8,6 +8,7 @@ import kotlinx.serialization.Serializable
 import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.util.UUID
+import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /**
@@ -518,7 +519,7 @@ class GameService(
                 return emptyList()
             }
 
-        val entrants = readQualifyingEntrants(conn, raceId)
+        val entrants = readQualifyingEntrants(conn, raceId, readCarWeights(conn, raceId))
 
         if (entrants.isEmpty()) {
             log.warn("No entrants found for qualifying — skipping")
@@ -568,11 +569,12 @@ class GameService(
                 return emptyList()
             }
 
+        val weights = readCarWeights(conn, raceId)
         val entrants = conn.prepareStatement(
             """
             SELECT rr.driver_id, rr.team_id, rr.grid_position,
                    d.stat_pace, d.stat_consistency,
-                   t.car_performance,
+                   t.car_aero, t.car_chassis, t.car_powertrain,
                    pf.focus AS focus,
                    rs.archetype AS strategy_archetype
               FROM race_results rr
@@ -592,7 +594,8 @@ class GameService(
                     while (rs.next()) {
                         val basePace = rs.getInt("stat_pace").toDouble()
                         val fx = focusEffect(rs.getString("focus"))
-                        val effectivePace = basePace * fx.paceMult + carTerm(rs.getInt("car_performance"))
+                        val car = weightedCar(rs.getInt("car_aero"), rs.getInt("car_chassis"), rs.getInt("car_powertrain"), weights)
+                        val effectivePace = basePace * fx.paceMult + carTerm(car)
                         val effectiveConsistency =
                             (rs.getInt("stat_consistency") + fx.consistencyDelta).coerceIn(1, 100)
                         add(
@@ -678,7 +681,7 @@ class GameService(
                 return emptyList()
             }
 
-        val entrants = readQualifyingEntrants(conn, raceId)
+        val entrants = readQualifyingEntrants(conn, raceId, readCarWeights(conn, raceId))
 
         if (entrants.isEmpty()) {
             log.warn("No entrants found for sprint qualifying — skipping")
@@ -728,11 +731,12 @@ class GameService(
                 return emptyList()
             }
 
+        val weights = readCarWeights(conn, raceId)
         val entrants = conn.prepareStatement(
             """
             SELECT sr.driver_id, sr.team_id, sr.grid_position,
                    d.stat_pace, d.stat_consistency,
-                   t.car_performance
+                   t.car_aero, t.car_chassis, t.car_powertrain
               FROM sprint_results sr
               JOIN drivers d ON d.id = sr.driver_id
               JOIN teams t ON t.id = sr.team_id
@@ -750,7 +754,7 @@ class GameService(
                                 teamId = rs.getString("team_id"),
                                 gridPosition = rs.getInt("grid_position"),
                                 statPace = rs.getInt("stat_pace").toDouble() +
-                                    carTerm(rs.getInt("car_performance")),
+                                    carTerm(weightedCar(rs.getInt("car_aero"), rs.getInt("car_chassis"), rs.getInt("car_powertrain"), weights)),
                                 statConsistency = rs.getInt("stat_consistency"),
                             )
                         )
@@ -815,11 +819,12 @@ class GameService(
     private fun readQualifyingEntrants(
         conn: Connection,
         raceId: UUID,
+        weights: CarWeights,
     ): List<RaceSim.QualifyingEntrant> {
         return conn.prepareStatement(
             """
             SELECT d.id, d.current_racing_team_id, d.stat_qualifying,
-                   t.car_performance,
+                   t.car_aero, t.car_chassis, t.car_powertrain,
                    pf.focus AS focus
               FROM drivers d
               JOIN teams t ON t.id = d.current_racing_team_id
@@ -835,7 +840,8 @@ class GameService(
                     while (rs.next()) {
                         val baseStat = rs.getInt("stat_qualifying").toDouble()
                         val fx = focusEffect(rs.getString("focus"))
-                        val effectiveStat = baseStat * fx.qualiMult + carTerm(rs.getInt("car_performance"))
+                        val car = weightedCar(rs.getInt("car_aero"), rs.getInt("car_chassis"), rs.getInt("car_powertrain"), weights)
+                        val effectiveStat = baseStat * fx.qualiMult + carTerm(car)
                         add(
                             RaceSim.QualifyingEntrant(
                                 driverId = rs.getObject("id", UUID::class.java),
@@ -1014,6 +1020,45 @@ class GameService(
      */
     private fun carTerm(carPerformance: Int): Double =
         (carPerformance - CAR_PERF_BASELINE) * CAR_PERF_WEIGHT
+
+    /**
+     * Per-track blend of the three car areas into one effective rating. A
+     * track's demands decide how much each area matters: powertrain for top
+     * speed + acceleration, aero for the cornering phases, chassis for braking
+     * + tyre wear. So a team's parts profile plays to (or against) each venue —
+     * making where you spend R&D a strategic call against your calendar.
+     */
+    private data class CarWeights(val aero: Double, val chassis: Double, val powertrain: Double)
+
+    private fun weightedCar(aero: Int, chassis: Int, powertrain: Int, w: CarWeights): Int =
+        (aero * w.aero + chassis * w.chassis + powertrain * w.powertrain).roundToInt()
+
+    /** Build normalised area weights from the given race's track demands. */
+    private fun readCarWeights(conn: Connection, raceId: UUID): CarWeights {
+        return conn.prepareStatement(
+            """
+            SELECT tk.demand_top_speed, tk.demand_acceleration,
+                   tk.demand_low_speed_cornering, tk.demand_medium_speed_cornering,
+                   tk.demand_high_speed_cornering, tk.demand_braking, tk.demand_tyre_wear
+              FROM races r
+              JOIN tracks tk ON tk.id = r.track_id
+             WHERE r.id = ?
+            """.trimIndent()
+        ).use { stmt ->
+            stmt.setObject(1, raceId)
+            stmt.executeQuery().use { rs ->
+                if (!rs.next()) return CarWeights(1.0 / 3, 1.0 / 3, 1.0 / 3)
+                val power = rs.getDouble("demand_top_speed") + rs.getDouble("demand_acceleration")
+                val aero = rs.getDouble("demand_low_speed_cornering") +
+                    rs.getDouble("demand_medium_speed_cornering") +
+                    rs.getDouble("demand_high_speed_cornering")
+                val chassis = rs.getDouble("demand_braking") + rs.getDouble("demand_tyre_wear")
+                val total = power + aero + chassis
+                if (total <= 0.0) CarWeights(1.0 / 3, 1.0 / 3, 1.0 / 3)
+                else CarWeights(aero = aero / total, chassis = chassis / total, powertrain = power / total)
+            }
+        }
+    }
 
     private companion object {
         const val QUALIFYING_SALT = 0x5111EFA11L
