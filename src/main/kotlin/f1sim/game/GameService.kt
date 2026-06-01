@@ -30,7 +30,25 @@ class GameService(
 
     private val fallbackRoundsPerSeason = 24
 
-    private val setupBonusMultiplier = 1.01
+    // Practice-focus trade-offs, folded into the sim at the GameService
+    // boundary. Each focus is a real choice — a one-lap (qualifying) vs
+    // race-day (pace + reliability) tilt. consistencyDelta shifts BOTH the
+    // race sim's variance and its DNF roll (both derive from stat_consistency),
+    // so a reliability setup genuinely lowers DNF risk at a cost elsewhere.
+    private data class FocusEffect(val qualiMult: Double, val paceMult: Double, val consistencyDelta: Int)
+
+    private val focusEffects: Map<String, FocusEffect> = mapOf(
+        // Balanced: mild all-round gain, no downside — the safe pick.
+        "SETUP" to FocusEffect(qualiMult = 1.015, paceMult = 1.015, consistencyDelta = 0),
+        // Race trim: better race pace + steadier, weaker over one lap.
+        "TYRE_PROGRAM" to FocusEffect(qualiMult = 0.980, paceMult = 1.020, consistencyDelta = 8),
+        // Reliability: much safer (low DNF), but gives up outright speed.
+        "RELIABILITY_CHECK" to FocusEffect(qualiMult = 0.985, paceMult = 0.985, consistencyDelta = 14),
+        // Qualifying trim: strong grid slot, but a riskier, twitchier race.
+        "DEVELOPMENT_FEEDBACK" to FocusEffect(qualiMult = 1.030, paceMult = 1.000, consistencyDelta = -10),
+    )
+    private val neutralFocus = FocusEffect(1.0, 1.0, 0)
+    private fun focusEffect(focus: String?): FocusEffect = focusEffects[focus] ?: neutralFocus
 
     // ------------------------------------------------------------------
     // DTOs
@@ -573,20 +591,17 @@ class GameService(
                 buildList {
                     while (rs.next()) {
                         val basePace = rs.getInt("stat_pace").toDouble()
-                        val focus = rs.getString("focus")
-                        val withSetup = if (focus == "SETUP") {
-                            basePace * setupBonusMultiplier
-                        } else {
-                            basePace
-                        }
-                        val effectivePace = withSetup + carTerm(rs.getInt("car_performance"))
+                        val fx = focusEffect(rs.getString("focus"))
+                        val effectivePace = basePace * fx.paceMult + carTerm(rs.getInt("car_performance"))
+                        val effectiveConsistency =
+                            (rs.getInt("stat_consistency") + fx.consistencyDelta).coerceIn(1, 100)
                         add(
                             RaceSim.RaceEntrant(
                                 driverId = rs.getObject("driver_id", UUID::class.java),
                                 teamId = rs.getString("team_id"),
                                 gridPosition = rs.getInt("grid_position"),
                                 statPace = effectivePace,
-                                statConsistency = rs.getInt("stat_consistency"),
+                                statConsistency = effectiveConsistency,
                                 strategyArchetype = rs.getString("strategy_archetype"),
                             )
                         )
@@ -819,13 +834,8 @@ class GameService(
                 buildList {
                     while (rs.next()) {
                         val baseStat = rs.getInt("stat_qualifying").toDouble()
-                        val focus = rs.getString("focus")
-                        val withSetup = if (focus == "SETUP") {
-                            baseStat * setupBonusMultiplier
-                        } else {
-                            baseStat
-                        }
-                        val effectiveStat = withSetup + carTerm(rs.getInt("car_performance"))
+                        val fx = focusEffect(rs.getString("focus"))
+                        val effectiveStat = baseStat * fx.qualiMult + carTerm(rs.getInt("car_performance"))
                         add(
                             RaceSim.QualifyingEntrant(
                                 driverId = rs.getObject("id", UUID::class.java),

@@ -22,10 +22,10 @@ const swapping = ref(false)
 const SOURCE_LABEL = { FREE_AGENT: 'Free agent', RESERVE: 'Reserve', ACADEMY: 'Academy', F2: 'F2', F3: 'F3', JUNIOR: 'Junior' }
 
 const FOCUS_OPTIONS = [
-  { value: 'SETUP', label: 'Setup (+pace)' },
-  { value: 'TYRE_PROGRAM', label: 'Tyre Program' },
-  { value: 'RELIABILITY_CHECK', label: 'Reliability Check' },
-  { value: 'DEVELOPMENT_FEEDBACK', label: 'Development Feedback' },
+  { value: 'SETUP', label: 'Balanced setup (+quali, +pace)' },
+  { value: 'TYRE_PROGRAM', label: 'Race trim (+race pace & steady, −quali)' },
+  { value: 'RELIABILITY_CHECK', label: 'Reliability (−DNF risk, a touch slower)' },
+  { value: 'DEVELOPMENT_FEEDBACK', label: 'Qualifying trim (+quali, riskier race)' },
 ]
 const ARCHETYPE_OPTIONS = [
   { value: 'M_H', label: 'Medium → Hard (safe)' },
@@ -241,7 +241,7 @@ function tyreClass(status) { return '' }
     <div v-else-if="loading" class="faint p-20">Loading session…</div>
 
     <div v-else-if="step === 'practice'">
-      <p class="hint faint"><b class="req">Required:</b> set a practice focus for each of your drivers before you can advance to qualifying. <b>Setup</b> grants a small qualifying/pace boost; the others are placeholders for now.</p>
+      <p class="hint faint"><b class="req">Required:</b> set a practice focus for each of your drivers before you can advance to qualifying. Each is a trade-off — tune for one-lap qualifying pace, race-day pace, or reliability (fewer DNFs).</p>
       <div v-if="!myTeamId" class="faint p-20">Select a team first to set focus.</div>
       <div v-else class="driver-cards">
         <div class="driver-card" :class="{ unset: !e.focus }" v-for="e in myPracticeEntries" :key="e.driverId">

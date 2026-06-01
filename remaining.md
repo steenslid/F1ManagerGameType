@@ -161,6 +161,14 @@ the user's repo should now contain all of them:
    average; operating-cost tick now charges the sum of the three; seeds split
    the old sustaining spend evenly. `TeamRdService` + R&D panel reworked to
    three per-area sliders. `rd_budget` column is now unused (superseded).
+23. `setup-tradeoffs` — the four practice focuses are now real risk/reward
+   setups (no schema change), folded into the sim in `GameService` via a
+   `FocusEffect` table (qualiMult, paceMult, consistencyDelta): SETUP balanced;
+   TYRE_PROGRAM race-trim (+pace/consistency, −quali); RELIABILITY_CHECK low-DNF
+   but slower; DEVELOPMENT_FEEDBACK qualifying-trim (+quali, −consistency, so a
+   riskier race). consistencyDelta shifts both race variance and the DNF roll.
+   RaceWeekendPanel labels/hint describe the trade-offs. (Main race + both
+   qualifying sessions use focus; the sprint *race* pace doesn't read focus.)
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
@@ -646,8 +654,10 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   (`series='F1'` on sim/market/standings queries; `TeamsPanel`/`TeamSelectPanel`
   request F1 only). `GameService.selectTeam` has no series guard yet — the UI
   just never offers an F2 team.
-- **Practice focus other than SETUP are no-ops.** TYRE_PROGRAM,
-  RELIABILITY_CHECK, DEVELOPMENT_FEEDBACK affect nothing in v1.
+- **Practice focuses are now real trade-offs** (patch 23) — each tilts
+  qualifying vs race pace vs reliability. The sprint *race* still doesn't read
+  focus (only its qualifying does); folding focus into the sprint pace query is
+  a small follow-up.
 - **No-strategy default ≠ M_H.** A driver with no strategy entry gets
   the neutral default in the sim (pace +0, sigma ×1.0). M_H specifically
   has sigma ×0.9. UI says "(default M-H)" — small lie.
