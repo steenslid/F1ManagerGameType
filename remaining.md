@@ -193,6 +193,11 @@ the user's repo should now contain all of them:
    area with a strong/weak flag vs their overall — so you can read the calendar
    and steer per-area R&D toward upcoming tracks. Follow-up: same hint on the
    Dashboard next-session card (needs favoredArea on CurrentRaceDto).
+27. `calendar-generation` — multi-season play. `OffSeasonService.
+   generateCalendar` (PRE_SEASON) clones the latest prior season's race set
+   into the new year with fresh ids when none exists, so seasons past the
+   seeded 2026 have a full calendar (sim, standings, schedule planner all keep
+   working). No-op when a calendar already exists; no schema change.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
@@ -659,9 +664,12 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   balanced — but until then, top teams print money.
 - **Ties in standings broken alphabetically.** No race-wins countback.
   Practically never hits with our point spreads.
-- **`GameService.countRoundsInSeason` falls back to 24** if no calendar
-  exists. Off-season step 11 should generate the next year's calendar
-  before this fires; currently any 2027+ season uses the fallback.
+- **Calendar generation (patch 27).** `OffSeasonService.generateCalendar`
+  runs in the PRE_SEASON hook and clones the most recent prior season's race
+  set into the new year (same tracks/rounds/sprint formats, fresh ids) when no
+  calendar exists. So 2027+ now get a real calendar; the `countRoundsInSeason`
+  24-round fallback is effectively a safety net only. Future work: vary the
+  calendar year-to-year (rotate tracks, add/drop venues) rather than cloning.
 - **`GameService` imports `f1sim.http.NotFoundException`.** Slight
   layering leak; move to `f1sim.common` if more services need typed
   exceptions.
