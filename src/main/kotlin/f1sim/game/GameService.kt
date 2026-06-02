@@ -26,6 +26,7 @@ class GameService(
     private val offSeasonService: OffSeasonService,
     private val driverMarketService: DriverMarketService,
     private val upgradeService: UpgradeService,
+    private val boardService: BoardService,
 ) {
 
     private val log = LoggerFactory.getLogger(GameService::class.java)
@@ -909,6 +910,10 @@ class GameService(
                 "FINANCE_SETTLED",
                 "End-of-season finances settled for $count teams",
             )
+        }
+        // Board verdict against the season target (prestige + budget swing).
+        boardService.applyVerdict(conn, from.year)?.let {
+            events += TransitionEventDto("BOARD_VERDICT", it)
         }
         return events
     }

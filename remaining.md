@@ -216,6 +216,14 @@ the user's repo should now contain all of them:
    projects" section (in-progress list + commission form). Guards: one in-flight
    project per area, must fit before season end, must afford the cash. This is
    the in-season counterpart to the passive pre-season R&D budget.
+30. `board-verdict` — the board objective now has teeth (no schema change).
+   `BoardService.applyVerdict`, fired from GameService's END_OF_SEASON hook
+   after a raced season, settles the player's WCC finish against the target:
+   meeting/beating it raises prestige (+1..+3) and pays a board bonus; missing
+   it cuts prestige (−1..−3) and the budget. Prestige ripples through sponsors,
+   the driver market and next year's target, so the goal self-reinforces.
+   Emitted as a BOARD_VERDICT transition event (shows in the feed). Follow-up:
+   firing on repeated failure.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
@@ -450,10 +458,10 @@ table on sprint weekends.
   - Sponsor refresh / market (renegotiate at deal end, defection on poor
     performance).
   - Calendar generation for future years (currently 2026 only).
-- **Board pressure.** The season target + live tracking landed (patch 28,
-  `BoardService` / Dashboard card). Still to build: the end-of-season verdict
-  and real consequences (firing, budget cuts), plus a cash-trajectory floor.
-  Uses `season_points`, `cash_reserves`, and the `teams.board_*` traits.
+- **Board pressure.** Target + live tracking (patch 28) and the end-of-season
+  verdict with consequences (patch 30 — prestige + budget swing) both landed.
+  Still to build: outright firing for repeated failure, and a cash-trajectory
+  floor objective. Uses `season_points`, `cash_reserves`, `teams.board_*`.
 - **Budget cap enforcement.** `cap_compliance_status` exists but isn't
   enforced. Need a tick that checks expenses against an era-defined cap,
   applies penalties (financial, future development restrictions).

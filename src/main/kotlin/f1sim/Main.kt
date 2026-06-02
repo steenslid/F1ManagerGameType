@@ -37,13 +37,13 @@ fun main() {
     val offSeasonService = OffSeasonService(db)
     val driverMarketService = DriverMarketService(db)
     val upgradeService = UpgradeService(db)
-    val gameService = GameService(db, offSeasonService, driverMarketService, upgradeService)
+    val boardService = BoardService(db)
+    val gameService = GameService(db, offSeasonService, driverMarketService, upgradeService, boardService)
     val raceWeekendService = RaceWeekendService(db)
     val standingsService = StandingsService(db)
     val lineupService = LineupService(db)
     val teamRdService = TeamRdService(db)
     val sponsorMarketService = SponsorMarketService(db)
-    val boardService = BoardService(db)
     val server = Server(
         config = config,
         db = db,
