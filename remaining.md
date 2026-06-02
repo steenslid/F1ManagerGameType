@@ -205,6 +205,17 @@ the user's repo should now contain all of them:
    an AHEAD/ON_TARGET/BEHIND status. `GET /api/board`; Dashboard shows a
    "Board objective" card (target vs current + summary). Follow-up: an
    end-of-season verdict event and real consequences (budget/firing).
+29. `upgrade-projects` — in-season, timed R&D. SCHEMA CHANGE (new
+   `upgrade_projects` table). The player commissions a SMALL/MEDIUM/LARGE
+   upgrade to one car area (gain/cost/rounds); it deducts cash up front and
+   delivers its gain to that area a set number of rounds later, applied at the
+   PRACTICE transition so it's live for the weekend it lands (season-end sweep
+   delivers any leftovers so cash is never wasted). New `UpgradeService` +
+   `UpgradeRoutes` (`GET/POST /api/team/upgrades`), wired into Main/Server and
+   GameService (PRACTICE + END_OF_SEASON hooks). R&D panel gains an "Upgrade
+   projects" section (in-progress list + commission form). Guards: one in-flight
+   project per area, must fit before season end, must afford the cash. This is
+   the in-season counterpart to the passive pre-season R&D budget.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further

@@ -18,7 +18,29 @@ const AREAS = [
   { key: 'powertrain', label: 'Powertrain', rating: 'carPowertrain', budget: 'rdPowertrain' },
 ]
 
-onMounted(load)
+const upg = ref(null)
+const upArea = ref('AERO')
+const upSize = ref('MEDIUM')
+const upBusy = ref(false)
+
+onMounted(() => { load(); loadUpgrades() })
+
+async function loadUpgrades() {
+  try { upg.value = (await api.getUpgrades()).data } catch (e) { /* leave as-is */ }
+}
+
+async function commission() {
+  upBusy.value = true
+  error.value = null
+  try {
+    upg.value = (await api.commissionUpgrade(upArea.value, upSize.value)).data
+    await refreshAll()
+  } catch (e) {
+    error.value = e.message || String(e)
+  } finally {
+    upBusy.value = false
+  }
+}
 
 async function load() {
   loading.value = true
@@ -144,6 +166,42 @@ function carClass(v) {
       <div v-else class="faint empty">No F1 teams.</div>
     </div>
   </div>
+
+  <!-- In-season upgrade projects -->
+  <div v-if="upg && upg.playerTeamId" class="card upg">
+    <h2>Upgrade projects</h2>
+    <p class="faint note">
+      Commission an in-season upgrade to one area — it costs cash up front and
+      delivers a few rounds later. Time it for the tracks ahead. Round
+      {{ upg.currentRound }} of {{ upg.totalRounds }} · cash {{ fmtMoney(upg.cashReserves) }}.
+    </p>
+
+    <div class="up-list" v-if="upg.inProgress.length">
+      <div class="up-row" v-for="p in upg.inProgress" :key="p.id">
+        <span class="up-area" :class="p.area.toLowerCase()">{{ p.area }}</span>
+        <span class="up-gain num">+{{ p.gain }}</span>
+        <span class="faint">delivers round {{ p.deliverRound }} · {{ p.roundsRemaining }} to go</span>
+        <span class="up-cost num faint">{{ fmtMoney(p.cost) }}</span>
+      </div>
+    </div>
+    <div v-else class="faint empty">No upgrades in development.</div>
+
+    <div class="commission">
+      <select v-model="upArea" class="sel">
+        <option value="AERO">Aerodynamics</option>
+        <option value="CHASSIS">Chassis</option>
+        <option value="POWERTRAIN">Powertrain</option>
+      </select>
+      <select v-model="upSize" class="sel">
+        <option v-for="s in upg.sizes" :key="s.size" :value="s.size">
+          {{ s.size }} · +{{ s.gain }} · {{ fmtMoney(s.cost) }} · {{ s.rounds }} rd
+        </option>
+      </select>
+      <button class="btn" :disabled="upBusy" @click="commission">
+        {{ upBusy ? 'Commissioning…' : 'Commission' }}
+      </button>
+    </div>
+  </div>
 </template>
 
 <style scoped>
@@ -187,4 +245,19 @@ tr.me td { background: var(--accent-soft); }
 .car-badge.elite { background: var(--accent-soft); color: #ff7066; border-color: #e1060055; }
 .faint { color: var(--faint); }
 .num { font-variant-numeric: tabular-nums; }
+
+.upg { margin-top: 16px; }
+.upg .note { font-size: 12px; margin: 0 0 14px; line-height: 1.5; }
+.up-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.up-row { display: flex; align-items: center; gap: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; font-size: 13px; }
+.up-area { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; padding: 3px 8px; border-radius: 5px; border: 1px solid var(--line); }
+.up-area.aero { color: #5aa9e6; border-color: #5aa9e655; background: #5aa9e615; }
+.up-area.powertrain { color: #e0b341; border-color: #e0b34155; background: #e0b34115; }
+.up-area.chassis { color: #2dd4bf; border-color: #2dd4bf55; background: #2dd4bf15; }
+.up-gain { font-weight: 800; color: var(--good); }
+.up-cost { margin-left: auto; }
+.commission { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.sel { background: var(--bg); border: 1px solid var(--line); color: var(--fg); padding: 9px 10px; border-radius: 8px; font-size: 13px; outline: none; }
+.sel:focus { border-color: var(--accent); }
+.commission .btn { width: auto; margin: 0; padding: 9px 18px; }
 </style>

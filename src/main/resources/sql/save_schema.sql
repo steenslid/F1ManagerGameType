@@ -471,3 +471,23 @@ CREATE TABLE driver_market_offers (
 );
 
 CREATE INDEX driver_market_offers_team_idx ON driver_market_offers (team_id);
+
+-- In-season R&D upgrade projects. The player commissions a boost to one car
+-- area that costs cash up front and delivers (applies its gain) a few rounds
+-- later — letting them time development for the calendar ahead.
+CREATE TABLE upgrade_projects (
+    id                 BIGSERIAL    PRIMARY KEY,
+    team_id            TEXT         NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    area               TEXT         NOT NULL,
+    gain               INT          NOT NULL,
+    cost               BIGINT       NOT NULL,
+    commissioned_year  INT          NOT NULL,
+    commissioned_round INT          NOT NULL,
+    deliver_round      INT          NOT NULL,
+    delivered          BOOLEAN      NOT NULL DEFAULT FALSE,
+    created_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
+
+    CONSTRAINT upgrade_area_valid CHECK (area IN ('AERO','CHASSIS','POWERTRAIN'))
+);
+
+CREATE INDEX upgrade_projects_team_idx ON upgrade_projects (team_id);

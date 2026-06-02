@@ -10,6 +10,7 @@ import f1sim.game.RaceWeekendService
 import f1sim.game.SponsorMarketService
 import f1sim.game.StandingsService
 import f1sim.game.TeamRdService
+import f1sim.game.UpgradeService
 import f1sim.http.routes.DriverMarketRoutes
 import f1sim.http.routes.DriverRoutes
 import f1sim.http.routes.BoardRoutes
@@ -30,6 +31,7 @@ import f1sim.http.routes.SprintResultsRoutes
 import f1sim.http.routes.StandingsRoutes
 import f1sim.http.routes.TeamRdRoutes
 import f1sim.http.routes.TeamRoutes
+import f1sim.http.routes.UpgradeRoutes
 import f1sim.http.routes.TeamSponsorshipRoutes
 import f1sim.http.routes.TrackRoutes
 import f1sim.save.SaveService
@@ -48,6 +50,7 @@ class Server(
     private val teamRdService: TeamRdService,
     private val sponsorMarketService: SponsorMarketService,
     private val boardService: BoardService,
+    private val upgradeService: UpgradeService,
 ) {
     private val log = LoggerFactory.getLogger(Server::class.java)
     private lateinit var app: Javalin
@@ -79,6 +82,7 @@ class Server(
         TeamRdRoutes(teamRdService).register(app)
         SponsorMarketRoutes(sponsorMarketService).register(app)
         BoardRoutes(boardService).register(app)
+        UpgradeRoutes(upgradeService).register(app)
         TeamSponsorshipRoutes(db).register(app)
         PowerUnitRoutes(db).register(app)
         SponsorRoutes(db).register(app)

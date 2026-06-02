@@ -66,6 +66,10 @@ export const api = {
   getRd: () => request('GET', '/api/team/rd'),
   setRd: (req) => request('POST', '/api/team/rd', req),
 
+  // In-season upgrade projects
+  getUpgrades: () => request('GET', '/api/team/upgrades'),
+  commissionUpgrade: (area, size) => request('POST', '/api/team/upgrades', { area, size }),
+
   // Sponsor market
   getSponsorMarket: () => request('GET', '/api/sponsors/market'),
   signSponsor: (req) => request('POST', '/api/sponsors/market/sign', req),

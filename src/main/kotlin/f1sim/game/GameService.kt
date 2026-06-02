@@ -25,6 +25,7 @@ class GameService(
     private val db: Database,
     private val offSeasonService: OffSeasonService,
     private val driverMarketService: DriverMarketService,
+    private val upgradeService: UpgradeService,
 ) {
 
     private val log = LoggerFactory.getLogger(GameService::class.java)
@@ -496,7 +497,7 @@ class GameService(
     ): List<TransitionEventDto> {
         return when (to.phase) {
             Phase.PRE_SEASON -> runPreSeasonHook(conn, to, from)
-            Phase.PRACTICE -> emptyList()
+            Phase.PRACTICE -> runPracticeHook(conn, to)
             Phase.QUALIFYING -> runQualifyingHook(conn, to)
             Phase.SPRINT_QUALIFYING -> runSprintQualifyingHook(conn, to)
             Phase.SPRINT -> runSprintHook(conn, to)
@@ -510,6 +511,12 @@ class GameService(
             // called for that case.)
             Phase.DRIVER_MARKET -> runEnterDriverMarketHook(conn, from)
         }
+    }
+
+    /** Entering a race weekend: deliver any upgrade projects whose round has come. */
+    private fun runPracticeHook(conn: Connection, state: GameState): List<TransitionEventDto> {
+        return upgradeService.deliverDueUpgrades(conn, state.year, state.round)
+            .map { TransitionEventDto("UPGRADE_DELIVERED", it) }
     }
 
     private fun runQualifyingHook(conn: Connection, state: GameState): List<TransitionEventDto> {
@@ -891,15 +898,19 @@ class GameService(
     }
 
     private fun runEndOfSeasonHook(conn: Connection, from: GameState): List<TransitionEventDto> {
+        val events = mutableListOf<TransitionEventDto>()
+        // Sweep any upgrade still in development so its cash is never wasted.
+        upgradeService.deliverPendingUpgrades(conn).forEach {
+            events += TransitionEventDto("UPGRADE_DELIVERED", "$it (season-end)")
+        }
         val count = offSeasonService.runEndOfSeasonHooks(conn, from.year)
-        return if (count > 0) {
-            listOf(
-                TransitionEventDto(
-                    "FINANCE_SETTLED",
-                    "End-of-season finances settled for $count teams",
-                ),
+        if (count > 0) {
+            events += TransitionEventDto(
+                "FINANCE_SETTLED",
+                "End-of-season finances settled for $count teams",
             )
-        } else emptyList()
+        }
+        return events
     }
 
     private fun runOffSeasonHook(conn: Connection, from: GameState): List<TransitionEventDto> {
