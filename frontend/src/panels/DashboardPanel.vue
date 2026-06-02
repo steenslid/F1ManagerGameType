@@ -10,6 +10,7 @@ const { state, myTeam, hasTeam } = useGame()
 const driverStandings = ref([])
 const teamStandings = ref([])
 const loadingStandings = ref(false)
+const board = ref(null)
 
 async function loadStandings() {
   if (!state.overview?.year) return
@@ -26,9 +27,17 @@ async function loadStandings() {
   }
 }
 
-onMounted(loadStandings)
-// Re-pull standings whenever the season or round changes (after an advance).
-watch(() => [state.overview?.year, state.overview?.round], loadStandings)
+async function loadBoard() {
+  try { board.value = (await api.getBoard()).data } catch { board.value = null }
+}
+
+function refresh() { loadStandings(); loadBoard() }
+
+const STATUS_LABEL = { AHEAD: 'Ahead', ON_TARGET: 'On target', BEHIND: 'Behind' }
+
+onMounted(refresh)
+// Re-pull whenever the season or round changes (after an advance).
+watch(() => [state.overview?.year, state.overview?.round], refresh)
 
 const myTeamId = computed(() => state.overview?.playerTeam?.id || null)
 
@@ -145,6 +154,17 @@ function posClass(pos) {
     </div>
 
     <div class="col">
+      <!-- Board objective -->
+      <div class="card board" v-if="board?.targetPosition">
+        <h2>Board objective</h2>
+        <div class="board-row">
+          <div class="bm"><span class="bv num">P{{ board.targetPosition }}</span><span class="bl">target</span></div>
+          <div class="bm"><span class="bv num">P{{ board.currentPosition }}</span><span class="bl">current</span></div>
+          <span class="bbadge" :class="board.status.toLowerCase()">{{ STATUS_LABEL[board.status] || board.status }}</span>
+        </div>
+        <div class="bsub faint">{{ board.summary }}</div>
+      </div>
+
       <!-- Constructors -->
       <div class="card">
         <h2>Constructors</h2>
@@ -238,5 +258,14 @@ tr.me td { background: var(--accent-soft); }
 .car .lab { color: var(--muted); font-size: 12px; }
 .car .go { display: inline-block; margin-top: 10px; font-size: 12px; color: #ff7066; font-weight: 700; cursor: pointer; }
 .car .go:hover { text-decoration: underline; }
+.board-row { display: flex; align-items: center; gap: 22px; margin-bottom: 8px; }
+.board .bm { display: flex; flex-direction: column; }
+.board .bv { font-size: 24px; font-weight: 800; }
+.board .bl { font-size: 10px; text-transform: uppercase; letter-spacing: .6px; color: var(--faint); }
+.board .bbadge { margin-left: auto; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; padding: 4px 10px; border-radius: 20px; }
+.board .bbadge.ahead { background: rgba(57,211,83,.12); color: var(--good); border: 1px solid #39d35355; }
+.board .bbadge.on_target { background: var(--accent-soft); color: #ff7066; border: 1px solid #e1060055; }
+.board .bbadge.behind { background: #e0b34122; color: var(--warn); border: 1px solid #e0b34155; }
+.board .bsub { font-size: 12px; line-height: 1.4; }
 .faint { color: var(--faint); }
 </style>

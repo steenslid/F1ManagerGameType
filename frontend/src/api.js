@@ -75,6 +75,9 @@ export const api = {
   // Ladder (feeder grids: 'f2' | 'f3')
   getLadder: (series) => request('GET', `/api/ladder/${series}`),
 
+  // Board objective
+  getBoard: () => request('GET', '/api/board'),
+
   // Standings
   getStandings: (filter) => request('GET', '/api/standings' + qs(filter)),
 

@@ -3,6 +3,7 @@ package f1sim
 import f1sim.config.AppConfig
 import f1sim.db.Database
 import f1sim.db.Migrations
+import f1sim.game.BoardService
 import f1sim.game.DriverMarketService
 import f1sim.game.GameService
 import f1sim.game.LineupService
@@ -40,6 +41,7 @@ fun main() {
     val lineupService = LineupService(db)
     val teamRdService = TeamRdService(db)
     val sponsorMarketService = SponsorMarketService(db)
+    val boardService = BoardService(db)
     val server = Server(
         config = config,
         db = db,
@@ -51,6 +53,7 @@ fun main() {
         lineupService = lineupService,
         teamRdService = teamRdService,
         sponsorMarketService = sponsorMarketService,
+        boardService = boardService,
     )
     server.start()
 

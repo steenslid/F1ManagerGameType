@@ -198,6 +198,13 @@ the user's repo should now contain all of them:
    into the new year with fresh ids when none exists, so seasons past the
    seeded 2026 have a full calendar (sim, standings, schedule planner all keep
    working). No-op when a calendar already exists; no schema change.
+28. `board-objective` — a season target to plan toward (read-only, no schema).
+   `BoardService` derives a constructors'-finish target from the team's
+   prestige rank nudged by `board_ambition` (ambitious boards expect you to
+   outperform prestige), reports current WCC position from season points, and
+   an AHEAD/ON_TARGET/BEHIND status. `GET /api/board`; Dashboard shows a
+   "Board objective" card (target vs current + summary). Follow-up: an
+   end-of-season verdict event and real consequences (budget/firing).
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
@@ -432,10 +439,10 @@ table on sprint weekends.
   - Sponsor refresh / market (renegotiate at deal end, defection on poor
     performance).
   - Calendar generation for future years (currently 2026 only).
-- **Board pressure.** Season-start targets (constructors' position,
-  cash-trajectory floor), end-of-season verdict, consequences (firing,
-  budget cuts). Uses `season_points`, `cash_reserves`, and the
-  `teams.board_*` traits we already store.
+- **Board pressure.** The season target + live tracking landed (patch 28,
+  `BoardService` / Dashboard card). Still to build: the end-of-season verdict
+  and real consequences (firing, budget cuts), plus a cash-trajectory floor.
+  Uses `season_points`, `cash_reserves`, and the `teams.board_*` traits.
 - **Budget cap enforcement.** `cap_compliance_status` exists but isn't
   enforced. Need a tick that checks expenses against an era-defined cap,
   applies penalties (financial, future development restrictions).
