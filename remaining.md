@@ -185,6 +185,14 @@ the user's repo should now contain all of them:
    strategic call against the calendar. `car_performance` stays the displayed
    overall (avg of the three); the sim now reads the per-track blend instead.
    No schema change. Follow-up: a UI hint showing each track's favoured area.
+26. `season-planning` — surfaces per-track demands for forward R&D planning
+   (no schema change). `RaceRoutes` now exposes `track.type` + `track.favoredArea`
+   (AERO|CHASSIS|POWERTRAIN, from the same demand blend the sim uses);
+   `TeamRoutes` adds `carAero/carChassis/carPowertrain` to TeamDto. The Schedule
+   screen shows each race's favoured-area pill plus the player's rating in that
+   area with a strong/weak flag vs their overall — so you can read the calendar
+   and steer per-area R&D toward upcoming tracks. Follow-up: same hint on the
+   Dashboard next-session card (needs favoredArea on CurrentRaceDto).
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further

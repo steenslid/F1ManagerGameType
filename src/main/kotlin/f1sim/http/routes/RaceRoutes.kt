@@ -38,6 +38,11 @@ class RaceRoutes(private val db: Database) {
         val id: String,
         val name: String,
         val country: String,
+        val type: String,
+        // Which car area this track rewards most (AERO | CHASSIS | POWERTRAIN),
+        // from its demand profile — same blend the race sim uses. Lets the
+        // player plan R&D against the upcoming calendar.
+        val favoredArea: String,
     )
 
     fun register(app: Javalin) {
@@ -103,13 +108,35 @@ class RaceRoutes(private val db: Database) {
             id = rs.getString("track_id"),
             name = rs.getString("track_name"),
             country = rs.getString("track_country"),
+            type = rs.getString("track_type"),
+            favoredArea = favoredArea(rs),
         ),
     )
+
+    // Mirror the sim's per-track weighting: powertrain ← top speed + accel,
+    // aero ← cornering phases, chassis ← braking + tyre wear. Return the
+    // dominant area.
+    private fun favoredArea(rs: ResultSet): String {
+        val power = rs.getDouble("demand_top_speed") + rs.getDouble("demand_acceleration")
+        val aero = rs.getDouble("demand_low_speed_cornering") +
+            rs.getDouble("demand_medium_speed_cornering") +
+            rs.getDouble("demand_high_speed_cornering")
+        val chassis = rs.getDouble("demand_braking") + rs.getDouble("demand_tyre_wear")
+        return when (maxOf(power, aero, chassis)) {
+            aero -> "AERO"
+            power -> "POWERTRAIN"
+            else -> "CHASSIS"
+        }
+    }
 
     private companion object {
         const val SELECT_COLUMNS = """
             SELECT r.id, r.season_year, r.round, r.session_format,
-                   r.track_id, t.name AS track_name, t.country AS track_country
+                   r.track_id, t.name AS track_name, t.country AS track_country,
+                   t.type AS track_type,
+                   t.demand_top_speed, t.demand_acceleration,
+                   t.demand_low_speed_cornering, t.demand_medium_speed_cornering,
+                   t.demand_high_speed_cornering, t.demand_braking, t.demand_tyre_wear
               FROM races r
               JOIN tracks t ON t.id = r.track_id
         """

@@ -33,6 +33,9 @@ class TeamRoutes(private val db: Database) {
         val regulationUnderstanding: Double,
         val pitCrewRating: Int,
         val carPerformance: Int,
+        val carAero: Int,
+        val carChassis: Int,
+        val carPowertrain: Int,
         val seasonPoints: Int,
     )
 
@@ -117,6 +120,9 @@ class TeamRoutes(private val db: Database) {
         regulationUnderstanding = rs.getDouble("regulation_understanding"),
         pitCrewRating = rs.getInt("pit_crew_rating"),
         carPerformance = rs.getInt("car_performance"),
+        carAero = rs.getInt("car_aero"),
+        carChassis = rs.getInt("car_chassis"),
+        carPowertrain = rs.getInt("car_powertrain"),
         seasonPoints = rs.getInt("season_points"),
     )
 
@@ -126,7 +132,7 @@ class TeamRoutes(private val db: Database) {
                    cash_reserves, current_year_income, current_year_expenses,
                    heritage_payment, base_operating_cost, academy_investment,
                    cap_compliance_status, regulation_understanding, pit_crew_rating,
-                   car_performance, season_points
+                   car_performance, car_aero, car_chassis, car_powertrain, season_points
               FROM teams
         """
     }
