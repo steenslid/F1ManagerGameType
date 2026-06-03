@@ -1,5 +1,12 @@
 # ui-plan.md
 
+> **STATUS (current): largely delivered.** The two-UI shell, nav, season-control
+> bar and Dashboard are built, and the game UI now spans Race Weekend, Schedule
+> (with per-track favoured areas), Standings, Drivers, Staff, Market (driver +
+> sponsor), R&D (per-area budgets + upgrade projects), Ladder (F2/F3), Teams and
+> History. See `frontend/README.md` for the live screen list and `remaining.md`
+> for the per-patch log. This file is kept as the original plan/visual direction.
+
 Working doc for the **new game UI** for the F1 team-management sim. Pair this
 with `remaining.md` (backend/game status) and `information.md` (design doc).
 Goal: a real management-game front end alongside the existing test UI, same

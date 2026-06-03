@@ -1,5 +1,11 @@
 # UI Overhaul & V2 Architecture
 
+> **STATUS (current): done and built well beyond this overhaul.** The advance
+> loop is wired, and Staff plus many new screens (R&D, Ladder, Standings,
+> History, interactive sponsor market, mid-season call-ups) have shipped. The
+> "Pending / Next Steps" at the bottom are historical. See `frontend/README.md`
+> for the current screens and `remaining.md` for the implementation log.
+
 ## Overview
 This document outlines the changes made to the `frontend` directory to implement the new "F1-Broadcast" dark theme UI while safely preserving the original test environment. The UI was restructured from a flat panel system into a consolidated, component-driven layout.
 

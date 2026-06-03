@@ -4,6 +4,18 @@ Status snapshot for a single-player F1 team management game. Kotlin backend
 (JDK 25, Kotlin 2.3.20, Javalin 6, HikariCP, PostgreSQL, kotlinx.serialization)
 + Vue 3 / Vite frontend, schema-per-save Postgres.
 
+> **Current state (through patch 31):** core loop, race/qualifying/sprint sim,
+> standings, finances, and the full 2026 seed are in. Built out since: the
+> driver market + mid-season reserve/junior call-ups, the F3→F2→F1 ladder with
+> young-driver growth, per-area car R&D (aero/chassis/powertrain) with per-track
+> demand weighting and in-season upgrade projects, the player sponsor market,
+> board objectives with an end-of-season verdict (prestige/budget swing),
+> multi-season calendar generation, and a full Vue game UI (Dashboard, Race
+> Weekend, Schedule, Standings, Drivers, Staff, Market, R&D, Ladder, Teams,
+> History). The numbered list below is the patch-by-patch log; "Still to build"
+> / "Known issues" sections track what's stubbed (notably: personnel as a real
+> market, an AI R&D brain, board firing, in-series F2/F3 race sims, news/events).
+
 Design doc: `information.md`.
 
 ## Session handoff (read this first)
