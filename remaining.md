@@ -224,6 +224,11 @@ the user's repo should now contain all of them:
    the driver market and next year's target, so the goal self-reinforces.
    Emitted as a BOARD_VERDICT transition event (shows in the feed). Follow-up:
    firing on repeated failure.
+31. `dashboard-favored-area` — completes the per-track planning loop on the
+   home screen. `GameService.CurrentRaceDto` now carries `favoredArea` (same
+   demand blend), and the Dashboard "Next session" card shows a "Favours
+   {area} · you {rating}" tag — putting the planning signal on the screen the
+   player sees most. No schema change.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further

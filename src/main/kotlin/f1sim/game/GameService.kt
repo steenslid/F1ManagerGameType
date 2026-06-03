@@ -121,6 +121,7 @@ class GameService(
         val trackId: String,
         val trackName: String,
         val trackCountry: String,
+        val favoredArea: String,
     )
 
     // ------------------------------------------------------------------
@@ -232,7 +233,10 @@ class GameService(
             conn.prepareStatement(
                 """
                 SELECT r.id, r.season_year, r.round, r.session_format,
-                       r.track_id, t.name AS track_name, t.country AS track_country
+                       r.track_id, t.name AS track_name, t.country AS track_country,
+                       t.demand_top_speed, t.demand_acceleration,
+                       t.demand_low_speed_cornering, t.demand_medium_speed_cornering,
+                       t.demand_high_speed_cornering, t.demand_braking, t.demand_tyre_wear
                   FROM races r
                   JOIN tracks t ON t.id = r.track_id
                  WHERE r.season_year = ? AND r.round = ?
@@ -244,6 +248,14 @@ class GameService(
                     if (!rs.next()) {
                         throw NotFoundException("No race for y${state.year} r${state.round}")
                     }
+                    val power = rs.getDouble("demand_top_speed") + rs.getDouble("demand_acceleration")
+                    val aero = rs.getDouble("demand_low_speed_cornering") +
+                        rs.getDouble("demand_medium_speed_cornering") +
+                        rs.getDouble("demand_high_speed_cornering")
+                    val chassis = rs.getDouble("demand_braking") + rs.getDouble("demand_tyre_wear")
+                    val favored = when (maxOf(power, aero, chassis)) {
+                        aero -> "AERO"; power -> "POWERTRAIN"; else -> "CHASSIS"
+                    }
                     CurrentRaceDto(
                         raceId = rs.getObject("id", UUID::class.java).toString(),
                         seasonYear = rs.getInt("season_year"),
@@ -252,6 +264,7 @@ class GameService(
                         trackId = rs.getString("track_id"),
                         trackName = rs.getString("track_name"),
                         trackCountry = rs.getString("track_country"),
+                        favoredArea = favored,
                     )
                 }
             }

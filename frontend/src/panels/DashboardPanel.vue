@@ -50,6 +50,19 @@ const carRank = computed(() => {
   return idx >= 0 ? idx + 1 : null
 })
 
+const AREA = {
+  AERO: { label: 'Aero', key: 'carAero' },
+  CHASSIS: { label: 'Chassis', key: 'carChassis' },
+  POWERTRAIN: { label: 'Powertrain', key: 'carPowertrain' },
+}
+const raceFavored = computed(() => {
+  const a = state.currentRace?.favoredArea
+  if (!a) return null
+  const info = AREA[a] || { label: a, key: null }
+  const rating = info.key && myTeam.value ? myTeam.value[info.key] : null
+  return { area: a, label: info.label, rating }
+})
+
 const finance = computed(() => myTeam.value?.finance || null)
 const net = computed(() => {
   if (!finance.value) return 0
@@ -126,6 +139,9 @@ function posClass(pos) {
             <div class="tags">
               <span v-if="state.currentRace.sessionFormat === 'SPRINT'" class="tag sprint">Sprint weekend</span>
               <span class="tag">{{ phaseLabel(state.overview?.phase) }}</span>
+              <span v-if="raceFavored" class="tag area" :class="raceFavored.area.toLowerCase()">
+                Favours {{ raceFavored.label }}<template v-if="raceFavored.rating != null"> · you {{ raceFavored.rating }}</template>
+              </span>
             </div>
           </div>
         </div>
@@ -236,6 +252,9 @@ function posClass(pos) {
 .tags { display: flex; gap: 6px; margin-top: 9px; }
 .tag { font-size: 10px; letter-spacing: .5px; text-transform: uppercase; padding: 3px 8px; border-radius: 6px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
 .tag.sprint { color: var(--warn); border-color: #e0b34155; }
+.tag.area.aero { color: #5aa9e6; border-color: #5aa9e655; }
+.tag.area.powertrain { color: #e0b341; border-color: #e0b34155; }
+.tag.area.chassis { color: #2dd4bf; border-color: #2dd4bf55; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { font-size: 10px; text-transform: uppercase; letter-spacing: .6px; color: var(--faint); text-align: left; padding: 0 8px 8px; font-weight: 600; }
