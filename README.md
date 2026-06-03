@@ -1,59 +1,89 @@
-# f1-sim — Starting Framework
+# f1-sim — F1 team-management simulation
 
-This is the scaffolding for the F1 team simulation game described in
-`information.md`. **It is intentionally incomplete** — it gets the project
-building, the database connecting, and the HTTP server serving the save
-management endpoints. Domain logic (drivers, teams, race sim, phases,
-markets, R&D) is not yet here.
+A single-player Formula 1 **team-management** sim: take control of a constructor,
+run race weekends, develop the car, sign drivers, manage sponsors and finances,
+and chase the board's championship target season after season.
 
-## What's in v0.1
+Kotlin/JVM backend (Javalin HTTP + PostgreSQL, schema-per-save) with a Vue 3
+front end. See `information.md` for the full design doc and `remaining.md` for
+the running implementation log (every feature shipped, patch by patch).
 
-- Gradle/Kotlin project, JVM 25, single module
-- HikariCP pool with per-borrow `search_path` switching (the schema-per-save story)
-- Public schema migration — `public.saves` registry
-- Save schema migration — `game` row only, as the seed of the per-save table set
-- HTTP server (Javalin) with the canonical response envelope
-- Save CRUD endpoints:
-  - `GET    /api/saves`
-  - `POST   /api/saves`
-  - `POST   /api/saves/{id}/load`
-  - `DELETE /api/saves/{id}`
-- Stub game state endpoint: `GET /api/game/state`
-- Health check: `GET /api/health`
+> Status: well past the original scaffold. The domain, seeds, phase loop, race
+> sim, markets, R&D, the driver ladder and a full game UI are all in. The
+> backend isn't compiled in the cloud dev environment (it needs JDK 25 + a
+> reachable Postgres), so build and play locally.
 
-## What's deliberately not in v0.1
+## What's implemented
 
-- Any domain table beyond `game` (drivers, teams, tracks, races, parts, ...)
-- Seed JSON loading (real 2026 grid)
-- Phase machine and `/api/game/advance`
-- Decisions, markets, R&D, sponsors, events
-- Race simulator
-- Vue frontend (no `web/` directory yet — design says Vue 3 + Vite)
-- Tests (add JUnit/kotlin-test once there's logic worth testing)
+**Core loop**
+- Phase machine + `POST /api/game/advance`: OFF_SEASON → DRIVER_MARKET →
+  PRE_SEASON → (PRACTICE → QUALIFYING/SPRINT → RACE → POST_RACE → BETWEEN_ROUNDS)×N
+  → END_OF_SEASON, with deterministic (seeded) simulation.
+- Race / qualifying / sprint simulation (`RaceSim`), driver + constructor
+  standings, race & sprint results, full 2026 seed grid.
 
-## Layout
+**Squad & people**
+- Driver market each off-season (player offers + AI matching, salary/cash gated).
+- Mid-season **reserve / junior call-up** between rounds (free agents, reserves,
+  or F2/F3 juniors 18+).
+- **Driver ladder**: F3 → F2 → F1. Champions are promoted up each season; young
+  drivers **develop** (pace/qualifying grow from their potential pool).
+- Personnel (staff) directory.
+
+**Car & R&D**
+- Per-area car performance — **aerodynamics / chassis / powertrain** — each with
+  its own rating and R&D budget; overall `car_performance` is their average.
+- Cars develop toward what their spend + technical capability sustains; the sim
+  weights the three areas by **each track's demands**, so the car suits some
+  venues more than others.
+- **In-season upgrade projects**: commission a timed boost to one area that
+  costs cash up front and delivers a few rounds later.
+
+**Money, sponsors, board**
+- Finances: sponsor revenue, operating costs (base + academy + R&D + salaries),
+  end-of-season settle.
+- **Sponsor market**: sign / renew / drop deals (acceptance gated by team
+  prestige vs the sponsor's standard + budget); player deals no longer
+  auto-renew. AI auto-renews with performance scaling + defection.
+- **Board objective**: a constructors'-finish target derived from prestige +
+  board ambition, with an **end-of-season verdict** that swings prestige and
+  budget — which ripples back into sponsors, the market and next year's target.
+
+**Planning & continuity**
+- Multi-season **calendar generation** (clones the prior season's calendar).
+- The Schedule and Dashboard surface each track's **favoured area** and your fit,
+  so you can steer per-area R&D and time upgrades against the calendar.
+
+## Architecture
 
 ```
 src/main/kotlin/f1sim/
-├── Main.kt
-├── config/        AppConfig
-├── db/            Database (HikariCP), Migrations
-├── http/          Server, Envelope, routes/
-├── save/          SaveService, SaveSession
-└── domain/        (empty — placeholder for game-domain types)
+├── Main.kt                wires services + HTTP server
+├── config/                AppConfig
+├── db/                    Database (HikariCP, per-borrow search_path), Migrations
+├── seed/                  SeedLoader + Seeds (2026 reference data from resources/seeds/*.json)
+├── sim/                   RaceSim (pure, deterministic)
+├── game/                  GameService (phase loop), OffSeasonService, DriverMarketService,
+│                          RaceWeekendService, StandingsService, LineupService, TeamRdService,
+│                          UpgradeService, SponsorMarketService, BoardService
+├── save/                  SaveService, SaveSession
+└── http/                  Server, Envelope, routes/*
 
 src/main/resources/
-├── sql/
-│   ├── public_schema.sql
-│   └── save_schema.sql
-└── logback.xml
+├── sql/{public_schema,save_schema}.sql    public registry + per-save schema
+└── seeds/*.json                           teams, drivers, personnel, sponsors, tracks, races, ...
 
-seeds/             (empty — for the 2026 reference JSONs)
+frontend/                  Vue 3 + Vite game UI (+ a fallback raw-table test UI)
 ```
+
+Data model is **schema-per-save**: `public.saves` is the registry; each save
+gets its own Postgres schema (`save_xxx`) created from `save_schema.sql`, with
+`search_path` switched per connection borrow.
 
 ## Running
 
-Requirements: JDK 21, PostgreSQL reachable somewhere, an empty database.
+**Backend** — requires **JDK 25** (the Kotlin 2.3.20 toolchain targets it; see
+`gradle.properties`) and a reachable PostgreSQL with an empty database.
 
 ```bash
 createdb f1sim
@@ -63,49 +93,39 @@ createdb f1sim
   -Df1sim.db.password=f1sim
 ```
 
-Or set the env equivalents (`F1SIM_DB_URL`, etc.).
+`gradle.properties` pins a local JDK 25 path (`org.gradle.java.home`) — adjust it
+to your machine, or override on the command line. Serves on `:7777`.
+
+**Frontend** — Node 20+:
+
+```bash
+cd frontend
+npm install
+npm run dev        # http://localhost:5173, talks to the backend on :7777
+```
+
+The game UI loads by default; a small toggle (bottom-right) switches to the
+raw-table **test UI** that exercises every endpoint directly.
 
 Smoke test:
 
 ```bash
 curl localhost:7777/api/health
-
-curl -X POST localhost:7777/api/saves \
-  -H 'content-type: application/json' \
+curl -X POST localhost:7777/api/saves -H 'content-type: application/json' \
   -d '{"saveName":"my-career","managerName":"M. Schumacher","difficulty":"NORMAL"}'
-
 curl localhost:7777/api/saves
-
-# Use the save_id from above
 curl -X POST localhost:7777/api/saves/<id>/load
 curl localhost:7777/api/game/state
 ```
 
-## Notes on key decisions
+## Working on it
 
-- **HTTP server: Javalin.** Per the design doc this was undecided between
-  Javalin, Ktor, and `sun.net.httpserver`. Javalin is the lightest sensible
-  option that still gives JSON parsing, path params, CORS, and routing
-  without ceremony. Swap is mechanical if you change your mind.
-
-- **Schema switching per borrow, not via `connectionInitSql`.** Hikari's
-  init SQL is configured once at pool creation, but the active save changes
-  at runtime. A single `SET search_path` statement per `withConnection` is
-  cheap and always correct.
-
-- **No Gradle wrapper committed.** Generate one with `gradle wrapper` after
-  cloning, or run via your installed Gradle. (The wrapper jar can't be
-  generated in this environment.)
-
-- **Singleton-per-schema `game` row** is enforced with
-  `CREATE UNIQUE INDEX game_singleton ON game ((true))`. Cheap trick.
-
-## Next steps (suggested order)
-
-1. Add domain tables to `save_schema.sql`: `tracks`, `teams`, `drivers`,
-   `engine_suppliers`, `pu_versions`, `regulation_eras`, `tyre_compounds`.
-2. Add the matching Kotlin domain types under `f1sim/domain/`.
-3. Write the seed loader: JSON files in `seeds/` → inserted into the new
-   save's schema right after `Migrations.createSaveSchema()`.
-4. Build the phase state machine (start with `OFF_SEASON` ↔ `PRE_SEASON`).
-5. Then either: race weekend mechanics, or the off-season pipeline.
+- **Schema changes mean recreating saves.** Several features added columns/tables
+  to `save_schema.sql`; an old save's schema won't have them. Delete and recreate
+  saves after pulling schema changes.
+- **Determinism:** simulation and off-season steps seed RNG from the save's
+  `master_rng_seed` (XOR'd with per-step salts), so a given save replays
+  identically.
+- **Docs:** `information.md` is the design doc; `remaining.md` is the
+  patch-by-patch implementation log and the list of what's still to build;
+  `ui-plan.md` / `gemini-ui.md` cover the front-end direction.

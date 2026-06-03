@@ -1,5 +1,13 @@
 # F1 Team Simulation Game — Design Document
 
+> **IMPLEMENTATION STATUS:** this is the original design doc / north star, not a
+> status report. Much of it is now built — the phase loop, race sim, seeds,
+> driver market + ladder (F3→F2→F1), per-area car R&D with per-track weighting
+> and in-season upgrade projects, the sponsor market, finances, board objectives
+> with an end-of-season verdict, multi-season calendars, and a full Vue game UI.
+> For exactly what's shipped (and what's still stubbed), see `remaining.md`,
+> which is the patch-by-patch log of truth.
+
 ## Overview
 
 A single-player F1 team management simulation focused on the long career arc (10–20 in-game years), starting in the 2026 season. The player manages one F1 team — either a real 2026 team or a custom team — through driver markets, R&D, sponsorships, regulation changes, and seasons of racing. Races are auto-simulated (no live race watching); the game's texture lives in the years between, not the laps.
