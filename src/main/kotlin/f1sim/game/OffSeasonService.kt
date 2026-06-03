@@ -203,14 +203,22 @@ class OffSeasonService(private val db: Database) {
             val rdChassis: Long,
             val rdPowertrain: Long,
             val regUnderstanding: Double,
+            val tdDesign: Int,
         )
 
         val rows = conn.prepareStatement(
             """
-            SELECT id, name, car_performance, car_aero, car_chassis, car_powertrain,
-                   rd_aero, rd_chassis, rd_powertrain, regulation_understanding
-              FROM teams
-             WHERE series = 'F1'
+            SELECT t.id, t.name, t.car_performance, t.car_aero, t.car_chassis, t.car_powertrain,
+                   t.rd_aero, t.rd_chassis, t.rd_powertrain, t.regulation_understanding,
+                   COALESCE(td.design, 50) AS td_design
+              FROM teams t
+              LEFT JOIN (
+                  SELECT current_team_id, MAX(skill_design) AS design
+                    FROM personnel
+                   WHERE NOT retired AND role = 'TECHNICAL_DIRECTOR'
+                   GROUP BY current_team_id
+              ) td ON td.current_team_id = t.id
+             WHERE t.series = 'F1'
             """.trimIndent()
         ).use { stmt ->
             stmt.executeQuery().use { rs ->
@@ -228,6 +236,7 @@ class OffSeasonService(private val db: Database) {
                                 rdChassis = rs.getLong("rd_chassis"),
                                 rdPowertrain = rs.getLong("rd_powertrain"),
                                 regUnderstanding = rs.getDouble("regulation_understanding"),
+                                tdDesign = rs.getInt("td_design"),
                             )
                         )
                     }
@@ -254,7 +263,10 @@ class OffSeasonService(private val db: Database) {
         )
 
         val updates = rows.mapNotNull { r ->
-            val tech = CAR_DEV_TECH_BASE + CAR_DEV_TECH_SWING * r.regUnderstanding
+            // Technical Director lifts (or, if you've no/poor TD, drags) the
+            // technical capability that turns R&D spend into car gains.
+            val tech = CAR_DEV_TECH_BASE + CAR_DEV_TECH_SWING * r.regUnderstanding +
+                CAR_DEV_TD_SWING * ((r.tdDesign - 50) / 50.0)
             val na = develop(r.aero, r.rdAero, tech)
             val nc = develop(r.chassis, r.rdChassis, tech)
             val np = develop(r.powertrain, r.rdPowertrain, tech)
@@ -390,10 +402,17 @@ class OffSeasonService(private val db: Database) {
 
         val rows = conn.prepareStatement(
             """
-            SELECT id, name, current_age, trait_peak_age, trait_decline_rate,
-                   stat_pace, stat_qualifying, development_pool
-              FROM drivers
-             WHERE NOT retired
+            SELECT d.id, d.name, d.current_age, d.trait_peak_age, d.trait_decline_rate,
+                   d.stat_pace, d.stat_qualifying, d.development_pool,
+                   COALESCE(re.dm, 0) AS re_dm
+              FROM drivers d
+              LEFT JOIN (
+                  SELECT current_team_id, MAX(skill_driver_management) AS dm
+                    FROM personnel
+                   WHERE NOT retired AND role = 'RACE_ENGINEER'
+                   GROUP BY current_team_id
+              ) re ON re.current_team_id = d.current_racing_team_id
+             WHERE NOT d.retired
             """.trimIndent()
         ).use { stmt ->
             stmt.executeQuery().use { rs ->
@@ -408,17 +427,21 @@ class OffSeasonService(private val db: Database) {
                         val oldPace = rs.getInt("stat_pace")
                         val oldQuali = rs.getInt("stat_qualifying")
                         val devPool = rs.getInt("development_pool")
+                        val reDriverMgmt = rs.getInt("re_dm")
 
                         val pastPeak = newAge > peakAge
                         // A driver still at/under peak with a development budget
                         // improves; how much depends on how much potential is
                         // left. Burns the pool, so growth tapers off over time.
+                        // A strong Race Engineer adds an extra point of growth.
                         val growth = if (!pastPeak && devPool > 0) {
-                            when {
+                            val base = when {
                                 devPool >= 150 -> 2
                                 devPool >= 50 -> 1
                                 else -> 0
                             }
+                            val reBonus = if (base > 0 && reDriverMgmt >= RACE_ENGINEER_GROWTH_SKILL) 1 else 0
+                            base + reBonus
                         } else 0
 
                         val newPace = when {
@@ -1641,6 +1664,8 @@ class OffSeasonService(private val db: Database) {
          */
         const val DRIVER_GROWTH_CAP = 92
         const val DRIVER_GROWTH_POOL_BURN = 70
+        /** Race Engineer driver-management skill at/above which growth gets +1. */
+        const val RACE_ENGINEER_GROWTH_SKILL = 75
 
         const val SPONSOR_RENEWAL_TERM_YEARS = 2
         const val MIN_RENEWAL_VALUE = 500_000L
@@ -1672,6 +1697,8 @@ class OffSeasonService(private val db: Database) {
         /** tech = BASE + SWING * regulation_understanding → 0.7..1.3. */
         const val CAR_DEV_TECH_BASE = 0.7
         const val CAR_DEV_TECH_SWING = 0.6
+        /** Technical Director skill_design (centred at 50) contribution to tech. */
+        const val CAR_DEV_TD_SWING = 0.2
         /** Car level a zero-spend team trends toward (back-marker). */
         const val CAR_DEV_FLOOR_TARGET = 45.0
         /** How far full spend + top tech can lift the target above the floor. */

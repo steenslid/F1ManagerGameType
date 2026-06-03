@@ -70,6 +70,11 @@ export const api = {
   getUpgrades: () => request('GET', '/api/team/upgrades'),
   commissionUpgrade: (area, size) => request('POST', '/api/team/upgrades', { area, size }),
 
+  // Personnel market (hire/fire staff)
+  getStaffMarket: () => request('GET', '/api/personnel/market'),
+  hireStaff: (personnelId, role) => request('POST', '/api/personnel/market/hire', { personnelId, role }),
+  releaseStaff: (personnelId) => request('POST', '/api/personnel/market/release', { personnelId }),
+
   // Sponsor market
   getSponsorMarket: () => request('GET', '/api/sponsors/market'),
   signSponsor: (req) => request('POST', '/api/sponsors/market/sign', req),

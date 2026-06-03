@@ -241,6 +241,17 @@ the user's repo should now contain all of them:
    demand blend), and the Dashboard "Next session" card shows a "Favours
    {area} · you {rating}" tag — putting the planning signal on the screen the
    player sees most. No schema change.
+32. `personnel-market` — staff become a real, managed resource (no schema
+   change). New `PersonnelMarketService` + `PersonnelMarketRoutes`
+   (`GET /api/personnel/market`, `POST .../hire|release`): the player hires
+   free-agent staff into their five role slots (one per role) and releases the
+   current holder to free a slot; salaries already flow into operating costs.
+   Staff now MATTER: the **Technical Director**'s design skill feeds the car-
+   development tech factor (`CAR_DEV_TD_SWING`), and a strong **Race Engineer**
+   (driver_management ≥ 75) adds +1 to young-driver growth in the aging tick.
+   The Staff screen is now an interactive hire/fire market (role slots +
+   free-agent table with per-role hire). Follow-up: AI staff hiring, and
+   wiring the Strategist/Crew Chief/Principal into the sim/morale.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
