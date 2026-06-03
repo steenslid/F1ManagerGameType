@@ -25,6 +25,8 @@ class GameService(
     private val db: Database,
     private val offSeasonService: OffSeasonService,
     private val driverMarketService: DriverMarketService,
+    private val upgradeService: UpgradeService,
+    private val boardService: BoardService,
 ) {
 
     private val log = LoggerFactory.getLogger(GameService::class.java)
@@ -119,6 +121,7 @@ class GameService(
         val trackId: String,
         val trackName: String,
         val trackCountry: String,
+        val favoredArea: String,
     )
 
     // ------------------------------------------------------------------
@@ -230,7 +233,10 @@ class GameService(
             conn.prepareStatement(
                 """
                 SELECT r.id, r.season_year, r.round, r.session_format,
-                       r.track_id, t.name AS track_name, t.country AS track_country
+                       r.track_id, t.name AS track_name, t.country AS track_country,
+                       t.demand_top_speed, t.demand_acceleration,
+                       t.demand_low_speed_cornering, t.demand_medium_speed_cornering,
+                       t.demand_high_speed_cornering, t.demand_braking, t.demand_tyre_wear
                   FROM races r
                   JOIN tracks t ON t.id = r.track_id
                  WHERE r.season_year = ? AND r.round = ?
@@ -242,6 +248,14 @@ class GameService(
                     if (!rs.next()) {
                         throw NotFoundException("No race for y${state.year} r${state.round}")
                     }
+                    val power = rs.getDouble("demand_top_speed") + rs.getDouble("demand_acceleration")
+                    val aero = rs.getDouble("demand_low_speed_cornering") +
+                        rs.getDouble("demand_medium_speed_cornering") +
+                        rs.getDouble("demand_high_speed_cornering")
+                    val chassis = rs.getDouble("demand_braking") + rs.getDouble("demand_tyre_wear")
+                    val favored = when (maxOf(power, aero, chassis)) {
+                        aero -> "AERO"; power -> "POWERTRAIN"; else -> "CHASSIS"
+                    }
                     CurrentRaceDto(
                         raceId = rs.getObject("id", UUID::class.java).toString(),
                         seasonYear = rs.getInt("season_year"),
@@ -250,6 +264,7 @@ class GameService(
                         trackId = rs.getString("track_id"),
                         trackName = rs.getString("track_name"),
                         trackCountry = rs.getString("track_country"),
+                        favoredArea = favored,
                     )
                 }
             }
@@ -496,7 +511,7 @@ class GameService(
     ): List<TransitionEventDto> {
         return when (to.phase) {
             Phase.PRE_SEASON -> runPreSeasonHook(conn, to, from)
-            Phase.PRACTICE -> emptyList()
+            Phase.PRACTICE -> runPracticeHook(conn, to)
             Phase.QUALIFYING -> runQualifyingHook(conn, to)
             Phase.SPRINT_QUALIFYING -> runSprintQualifyingHook(conn, to)
             Phase.SPRINT -> runSprintHook(conn, to)
@@ -510,6 +525,12 @@ class GameService(
             // called for that case.)
             Phase.DRIVER_MARKET -> runEnterDriverMarketHook(conn, from)
         }
+    }
+
+    /** Entering a race weekend: deliver any upgrade projects whose round has come. */
+    private fun runPracticeHook(conn: Connection, state: GameState): List<TransitionEventDto> {
+        return upgradeService.deliverDueUpgrades(conn, state.year, state.round)
+            .map { TransitionEventDto("UPGRADE_DELIVERED", it) }
     }
 
     private fun runQualifyingHook(conn: Connection, state: GameState): List<TransitionEventDto> {
@@ -891,15 +912,23 @@ class GameService(
     }
 
     private fun runEndOfSeasonHook(conn: Connection, from: GameState): List<TransitionEventDto> {
+        val events = mutableListOf<TransitionEventDto>()
+        // Sweep any upgrade still in development so its cash is never wasted.
+        upgradeService.deliverPendingUpgrades(conn).forEach {
+            events += TransitionEventDto("UPGRADE_DELIVERED", "$it (season-end)")
+        }
         val count = offSeasonService.runEndOfSeasonHooks(conn, from.year)
-        return if (count > 0) {
-            listOf(
-                TransitionEventDto(
-                    "FINANCE_SETTLED",
-                    "End-of-season finances settled for $count teams",
-                ),
+        if (count > 0) {
+            events += TransitionEventDto(
+                "FINANCE_SETTLED",
+                "End-of-season finances settled for $count teams",
             )
-        } else emptyList()
+        }
+        // Board verdict against the season target (prestige + budget swing).
+        boardService.applyVerdict(conn, from.year)?.let {
+            events += TransitionEventDto("BOARD_VERDICT", it)
+        }
+        return events
     }
 
     private fun runOffSeasonHook(conn: Connection, from: GameState): List<TransitionEventDto> {

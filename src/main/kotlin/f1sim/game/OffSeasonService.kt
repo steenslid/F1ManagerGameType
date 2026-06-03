@@ -96,16 +96,79 @@ class OffSeasonService(private val db: Database) {
      * fill in income (sponsor revenue) and expenses (base + salaries).
      */
     fun runPreSeasonHooks(conn: Connection, newSeasonYear: Int): Int {
+        val calendarRaces = generateCalendar(conn, newSeasonYear)
         val renewalEvents = renewSponsors(conn, newSeasonYear)
         val developmentEvents = runCarDevelopment(conn, newSeasonYear)
         val revenueEvents = applySponsorRevenueTick(conn, newSeasonYear)
         val costEvents = applyOperatingCostsTick(conn, newSeasonYear)
-        val total = renewalEvents + developmentEvents + revenueEvents + costEvents
+        val total = renewalEvents + developmentEvents + revenueEvents + costEvents + (if (calendarRaces > 0) 1 else 0)
         log.info(
-            "PRE_SEASON {}: {} sponsor events, {} car development, {} sponsor revenue events, {} operating cost events",
-            newSeasonYear, renewalEvents, developmentEvents, revenueEvents, costEvents,
+            "PRE_SEASON {}: {} calendar races, {} sponsor events, {} car development, {} sponsor revenue events, {} operating cost events",
+            newSeasonYear, calendarRaces, renewalEvents, developmentEvents, revenueEvents, costEvents,
         )
         return total
+    }
+
+    // ------------------------------------------------------------------
+    // Step 0: Calendar generation (PRE_SEASON — multi-season play)
+    // ------------------------------------------------------------------
+
+    /**
+     * Ensure the new season has a calendar. v1 clones the most recent prior
+     * season's race set — same tracks, rounds and sprint formats — into the
+     * new year with fresh race ids. No-op if a calendar already exists (so the
+     * seeded 2026 is untouched). Without this, seasons past the seeded one have
+     * no races: the sim skips every weekend and the schedule is empty. Cloning
+     * keeps multi-season play, standings and per-track planning all working.
+     */
+    private fun generateCalendar(conn: Connection, newSeasonYear: Int): Int {
+        val exists = conn.prepareStatement(
+            "SELECT 1 FROM races WHERE season_year = ? LIMIT 1"
+        ).use { stmt ->
+            stmt.setInt(1, newSeasonYear)
+            stmt.executeQuery().use { it.next() }
+        }
+        if (exists) return 0
+
+        val prevYear = conn.prepareStatement(
+            "SELECT MAX(season_year) AS y FROM races WHERE season_year < ?"
+        ).use { stmt ->
+            stmt.setInt(1, newSeasonYear)
+            stmt.executeQuery().use { rs ->
+                if (rs.next()) { val y = rs.getInt("y"); if (rs.wasNull()) null else y } else null
+            }
+        } ?: return 0
+
+        data class Round(val round: Int, val trackId: String, val format: String)
+        val template = conn.prepareStatement(
+            "SELECT round, track_id, session_format FROM races WHERE season_year = ? ORDER BY round ASC"
+        ).use { stmt ->
+            stmt.setInt(1, prevYear)
+            stmt.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(Round(rs.getInt("round"), rs.getString("track_id"), rs.getString("session_format")))
+                    }
+                }
+            }
+        }
+        if (template.isEmpty()) return 0
+
+        conn.prepareStatement(
+            "INSERT INTO races (id, season_year, round, track_id, session_format) VALUES (?, ?, ?, ?, ?)"
+        ).use { stmt ->
+            template.forEach { t ->
+                stmt.setObject(1, UUID.randomUUID())
+                stmt.setInt(2, newSeasonYear)
+                stmt.setInt(3, t.round)
+                stmt.setString(4, t.trackId)
+                stmt.setString(5, t.format)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        }
+        log.info("Generated {}-round calendar for {} (cloned from {})", template.size, newSeasonYear, prevYear)
+        return template.size
     }
 
     // ------------------------------------------------------------------

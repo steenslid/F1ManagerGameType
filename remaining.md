@@ -185,6 +185,50 @@ the user's repo should now contain all of them:
    strategic call against the calendar. `car_performance` stays the displayed
    overall (avg of the three); the sim now reads the per-track blend instead.
    No schema change. Follow-up: a UI hint showing each track's favoured area.
+26. `season-planning` — surfaces per-track demands for forward R&D planning
+   (no schema change). `RaceRoutes` now exposes `track.type` + `track.favoredArea`
+   (AERO|CHASSIS|POWERTRAIN, from the same demand blend the sim uses);
+   `TeamRoutes` adds `carAero/carChassis/carPowertrain` to TeamDto. The Schedule
+   screen shows each race's favoured-area pill plus the player's rating in that
+   area with a strong/weak flag vs their overall — so you can read the calendar
+   and steer per-area R&D toward upcoming tracks. Follow-up: same hint on the
+   Dashboard next-session card (needs favoredArea on CurrentRaceDto).
+27. `calendar-generation` — multi-season play. `OffSeasonService.
+   generateCalendar` (PRE_SEASON) clones the latest prior season's race set
+   into the new year with fresh ids when none exists, so seasons past the
+   seeded 2026 have a full calendar (sim, standings, schedule planner all keep
+   working). No-op when a calendar already exists; no schema change.
+28. `board-objective` — a season target to plan toward (read-only, no schema).
+   `BoardService` derives a constructors'-finish target from the team's
+   prestige rank nudged by `board_ambition` (ambitious boards expect you to
+   outperform prestige), reports current WCC position from season points, and
+   an AHEAD/ON_TARGET/BEHIND status. `GET /api/board`; Dashboard shows a
+   "Board objective" card (target vs current + summary). Follow-up: an
+   end-of-season verdict event and real consequences (budget/firing).
+29. `upgrade-projects` — in-season, timed R&D. SCHEMA CHANGE (new
+   `upgrade_projects` table). The player commissions a SMALL/MEDIUM/LARGE
+   upgrade to one car area (gain/cost/rounds); it deducts cash up front and
+   delivers its gain to that area a set number of rounds later, applied at the
+   PRACTICE transition so it's live for the weekend it lands (season-end sweep
+   delivers any leftovers so cash is never wasted). New `UpgradeService` +
+   `UpgradeRoutes` (`GET/POST /api/team/upgrades`), wired into Main/Server and
+   GameService (PRACTICE + END_OF_SEASON hooks). R&D panel gains an "Upgrade
+   projects" section (in-progress list + commission form). Guards: one in-flight
+   project per area, must fit before season end, must afford the cash. This is
+   the in-season counterpart to the passive pre-season R&D budget.
+30. `board-verdict` — the board objective now has teeth (no schema change).
+   `BoardService.applyVerdict`, fired from GameService's END_OF_SEASON hook
+   after a raced season, settles the player's WCC finish against the target:
+   meeting/beating it raises prestige (+1..+3) and pays a board bonus; missing
+   it cuts prestige (−1..−3) and the budget. Prestige ripples through sponsors,
+   the driver market and next year's target, so the goal self-reinforces.
+   Emitted as a BOARD_VERDICT transition event (shows in the feed). Follow-up:
+   firing on repeated failure.
+31. `dashboard-favored-area` — completes the per-track planning loop on the
+   home screen. `GameService.CurrentRaceDto` now carries `favoredArea` (same
+   demand blend), and the Dashboard "Next session" card shows a "Favours
+   {area} · you {rating}" tag — putting the planning signal on the screen the
+   player sees most. No schema change.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
@@ -419,10 +463,10 @@ table on sprint weekends.
   - Sponsor refresh / market (renegotiate at deal end, defection on poor
     performance).
   - Calendar generation for future years (currently 2026 only).
-- **Board pressure.** Season-start targets (constructors' position,
-  cash-trajectory floor), end-of-season verdict, consequences (firing,
-  budget cuts). Uses `season_points`, `cash_reserves`, and the
-  `teams.board_*` traits we already store.
+- **Board pressure.** Target + live tracking (patch 28) and the end-of-season
+  verdict with consequences (patch 30 — prestige + budget swing) both landed.
+  Still to build: outright firing for repeated failure, and a cash-trajectory
+  floor objective. Uses `season_points`, `cash_reserves`, `teams.board_*`.
 - **Budget cap enforcement.** `cap_compliance_status` exists but isn't
   enforced. Need a tick that checks expenses against an era-defined cap,
   applies penalties (financial, future development restrictions).
@@ -651,9 +695,12 @@ preservation. No client-side mirror of "loaded save" — query the backend.
   balanced — but until then, top teams print money.
 - **Ties in standings broken alphabetically.** No race-wins countback.
   Practically never hits with our point spreads.
-- **`GameService.countRoundsInSeason` falls back to 24** if no calendar
-  exists. Off-season step 11 should generate the next year's calendar
-  before this fires; currently any 2027+ season uses the fallback.
+- **Calendar generation (patch 27).** `OffSeasonService.generateCalendar`
+  runs in the PRE_SEASON hook and clones the most recent prior season's race
+  set into the new year (same tracks/rounds/sprint formats, fresh ids) when no
+  calendar exists. So 2027+ now get a real calendar; the `countRoundsInSeason`
+  24-round fallback is effectively a safety net only. Future work: vary the
+  calendar year-to-year (rotate tracks, add/drop venues) rather than cloning.
 - **`GameService` imports `f1sim.http.NotFoundException`.** Slight
   layering leak; move to `f1sim.common` if more services need typed
   exceptions.
