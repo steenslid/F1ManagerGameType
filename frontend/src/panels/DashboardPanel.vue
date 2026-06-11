@@ -77,36 +77,23 @@ const incomeBarPct = computed(() => {
   return total > 0 ? Math.round((inc / total) * 100) : 0
 })
 
-const attention = computed(() => {
-  if (!hasTeam.value) {
-    return { msg: 'No team selected', sub: 'Pick a constructor to take control of from the Teams screen.', go: 'Choose a team', target: 'Teams' }
-  }
+// Backend panel codes -> nav item names (for task click-through).
+const PANEL_MAP = {
+  RACE_WEEKEND: 'Race Weekend',
+  MARKET: 'Market',
+  RD: 'R&D',
+  STAFF: 'Staff',
+  TEAMS: 'Teams',
+  DASHBOARD: 'Dashboard',
+}
+const tasks = computed(() => state.tasks || [])
+const requiredTasks = computed(() => tasks.value.filter((t) => t.severity === 'REQUIRED'))
+
+const phaseLine = computed(() => {
   const p = state.overview?.phase
   const track = state.currentRace?.trackName
-  switch (p) {
-    case 'OFF_SEASON':
-      return { msg: 'Off-season', sub: 'Advance to open the driver market.', go: null }
-    case 'DRIVER_MARKET':
-      return { msg: 'Driver market is open', sub: 'Submit contract offers to free agents before the rounds resolve.', go: 'Open market', target: 'Market' }
-    case 'PRE_SEASON':
-      return { msg: 'Pre-season', sub: 'Advance to start the opening round.', go: null }
-    case 'PRACTICE':
-      return { msg: track ? `Practice open at ${track}` : 'Practice open', sub: 'Set a practice focus for your drivers before qualifying.', go: 'Set focus', target: 'Race Weekend' }
-    case 'QUALIFYING':
-    case 'SPRINT_QUALIFYING':
-      return { msg: 'Qualifying', sub: 'Pick a strategy archetype for each of your drivers.', go: 'Set strategy', target: 'Race Weekend' }
-    case 'RACE':
-    case 'SPRINT':
-      return { msg: 'Lights out', sub: 'Advance to run the session, then review the results.', go: 'Race weekend', target: 'Race Weekend' }
-    case 'POST_RACE':
-      return { msg: 'Session complete', sub: 'Review the results, then advance to the next round.', go: 'View results', target: 'Race Weekend' }
-    case 'BETWEEN_ROUNDS':
-      return { msg: 'Between rounds', sub: 'Advance to begin the next race weekend.', go: null }
-    case 'END_OF_SEASON':
-      return { msg: 'Season complete', sub: 'Advance into the off-season to settle the books.', go: null }
-    default:
-      return { msg: phaseLabel(p), sub: '', go: null }
-  }
+  if (p === 'PRACTICE' && track) return `Practice open at ${track}`
+  return phaseLabel(p)
 })
 
 function posClass(pos) {
@@ -117,13 +104,28 @@ function posClass(pos) {
 <template>
   <h1 class="page-title">Dashboard</h1>
 
-  <div class="card attn" :class="{ warn: !hasTeam }">
+  <!-- Pending tasks: the player's to-do list, straight from the backend -->
+  <div class="card attn" :class="{ warn: requiredTasks.length }">
     <span class="dot"></span>
-    <div>
-      <div class="msg">{{ attention.msg }}</div>
-      <div class="sub">{{ attention.sub }}</div>
+    <div class="attn-body">
+      <div class="msg">
+        {{ phaseLine }}
+        <span v-if="!tasks.length" class="all-clear">· all clear — hit Continue ▶</span>
+      </div>
+      <div class="task-list" v-if="tasks.length">
+        <div
+          class="task"
+          v-for="t in tasks"
+          :key="t.id"
+          @click="emit('navigate', PANEL_MAP[t.panel] || 'Dashboard')"
+        >
+          <span class="sev" :class="t.severity.toLowerCase()">{{ t.severity === 'REQUIRED' ? '!' : '·' }}</span>
+          <span class="tlabel">{{ t.label }}</span>
+          <span class="tdetail faint">{{ t.detail }}</span>
+          <span class="tgo">→</span>
+        </div>
+      </div>
     </div>
-    <span v-if="attention.go" class="go" @click="emit('navigate', attention.target)">{{ attention.go }} →</span>
   </div>
 
   <div class="grid">
@@ -238,9 +240,20 @@ function posClass(pos) {
 .attn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
 .attn.warn .dot { background: var(--warn); box-shadow: 0 0 0 4px #e0b34122; }
 .attn .msg { font-weight: 600; }
-.attn .sub { color: var(--muted); font-size: 12px; }
-.attn .go { margin-left: auto; font-size: 12px; color: #ff7066; font-weight: 700; cursor: pointer; }
-.attn .go:hover { text-decoration: underline; }
+.attn-body { flex: 1; min-width: 0; }
+.all-clear { color: var(--good); font-size: 12px; font-weight: 600; }
+.task-list { margin-top: 8px; display: flex; flex-direction: column; }
+.task {
+  display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; margin: 0 -8px;
+  border-radius: 7px; cursor: pointer; font-size: 13px;
+}
+.task:hover { background: var(--surface); }
+.sev { width: 16px; height: 16px; flex: none; display: inline-grid; place-items: center; border-radius: 4px; font-weight: 800; font-size: 11px; align-self: center; }
+.sev.required { background: #e0b34122; color: var(--warn); border: 1px solid #e0b34155; }
+.sev.suggested { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
+.tlabel { font-weight: 700; white-space: nowrap; }
+.tdetail { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tgo { margin-left: auto; color: #ff7066; font-weight: 700; }
 
 .grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
 .col { display: flex; flex-direction: column; gap: 16px; }

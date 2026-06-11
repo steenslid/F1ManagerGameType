@@ -1,6 +1,7 @@
 package f1sim.http.routes
 
 import f1sim.game.GameService
+import f1sim.game.TasksService
 import f1sim.http.Envelope
 import f1sim.http.timed
 import io.javalin.Javalin
@@ -10,14 +11,28 @@ import io.javalin.http.Context
  * /api/game — overview, available actions, phase advance, team selection,
  * current race lookup.
  */
-class GameRoutes(private val gameService: GameService) {
+class GameRoutes(
+    private val gameService: GameService,
+    private val tasksService: TasksService,
+) {
 
     fun register(app: Javalin) {
         app.get("/api/game/state", ::state)
         app.get("/api/game/actions", ::actions)
         app.post("/api/game/advance", ::advance)
+        app.post("/api/game/continue", ::continueFlow)
+        app.get("/api/game/tasks", ::tasks)
         app.post("/api/game/select-team", ::selectTeam)
         app.get("/api/game/current-race", ::currentRace)
+    }
+
+    private fun continueFlow(ctx: Context) = ctx.timed {
+        val result = gameService.continueFlow()
+        Envelope.encode(result, GameService.ContinueResultDto.serializer())
+    }
+
+    private fun tasks(ctx: Context) = ctx.timed {
+        Envelope.encode(tasksService.view(), TasksService.TasksDto.serializer())
     }
 
     private fun state(ctx: Context) = ctx.timed {

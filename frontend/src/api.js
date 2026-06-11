@@ -46,6 +46,8 @@ export const api = {
   getGameState: () => request('GET', '/api/game/state'),
   getActions: () => request('GET', '/api/game/actions'),
   advance: () => request('POST', '/api/game/advance'),
+  continueGame: () => request('POST', '/api/game/continue'),
+  getTasks: () => request('GET', '/api/game/tasks'),
   selectTeam: (teamId) => request('POST', '/api/game/select-team', { teamId }),
   getCurrentRace: () => request('GET', '/api/game/current-race'),
 
@@ -69,6 +71,11 @@ export const api = {
   // In-season upgrade projects
   getUpgrades: () => request('GET', '/api/team/upgrades'),
   commissionUpgrade: (area, size) => request('POST', '/api/team/upgrades', { area, size }),
+
+  // Personnel market (hire/fire staff)
+  getStaffMarket: () => request('GET', '/api/personnel/market'),
+  hireStaff: (personnelId, role) => request('POST', '/api/personnel/market/hire', { personnelId, role }),
+  releaseStaff: (personnelId) => request('POST', '/api/personnel/market/release', { personnelId }),
 
   // Sponsor market
   getSponsorMarket: () => request('GET', '/api/sponsors/market'),

@@ -90,6 +90,19 @@ class GameService(
     )
 
     @Serializable
+    data class ContinueResultDto(
+        val steps: Int,
+        val current: PhaseStateDto,
+        // Why we stopped: a short player-facing label plus the screen that
+        // handles it. blocked=true means a gate refused the next advance
+        // (e.g. practice focus unset) rather than a natural stop point.
+        val reason: String,
+        val panel: String,
+        val blocked: Boolean,
+        val events: List<TransitionEventDto>,
+    )
+
+    @Serializable
     data class TransitionEventDto(
         val type: String,
         val message: String,
@@ -189,6 +202,76 @@ class GameService(
                 conn.autoCommit = true
             }
         }
+    }
+
+    /**
+     * Smart advance — the "Continue" button. Repeats [advance] until the game
+     * reaches a point that wants the player's attention, then reports why it
+     * stopped and which screen handles it:
+     *
+     *   PRACTICE       set practice focus        (gated)
+     *   QUALIFYING     set race strategy         (gated)
+     *   POST_RACE      race result to review
+     *   DRIVER_MARKET  offers window each round
+     *   PRE_SEASON     season planning (R&D, sponsors, upgrades)
+     *
+     * Pass-through phases (BETWEEN_ROUNDS, END_OF_SEASON, OFF_SEASON, RACE,
+     * SPRINT, SPRINT_QUALIFYING) are advanced silently, accumulating their
+     * events. If a gate refuses an advance (IllegalStateException from the
+     * pre-advance checks) we stop gracefully with blocked=true and the gate's
+     * message — that IS the player's next task, not an error.
+     */
+    fun continueFlow(): ContinueResultDto {
+        SaveSession.requireLoaded()
+        val events = mutableListOf<TransitionEventDto>()
+        var steps = 0
+        var blocked = false
+        var blockedMessage: String? = null
+
+        while (steps < CONTINUE_MAX_STEPS) {
+            val result = try {
+                advance()
+            } catch (e: IllegalStateException) {
+                blocked = true
+                blockedMessage = e.message
+                break
+            }
+            steps++
+            events += result.events
+            if (Phase.valueOf(result.current.phase) in CONTINUE_STOP_PHASES) break
+        }
+
+        val state = db.withConnection { conn -> readPhaseState(conn) }
+        val (reason, panel) = if (blocked) {
+            (blockedMessage ?: "A decision is needed before continuing") to stopPanel(state.phase)
+        } else {
+            stopReason(state.phase) to stopPanel(state.phase)
+        }
+        return ContinueResultDto(
+            steps = steps,
+            current = state.toDto(),
+            reason = reason,
+            panel = panel,
+            blocked = blocked,
+            events = events,
+        )
+    }
+
+    private fun stopReason(phase: Phase): String = when (phase) {
+        Phase.PRACTICE -> "Practice is open — set a focus for your drivers"
+        Phase.QUALIFYING -> "Qualifying is done — pick race strategies"
+        Phase.POST_RACE -> "Race finished — review the result"
+        Phase.DRIVER_MARKET -> "The driver market is open — make your offers"
+        Phase.PRE_SEASON -> "New season — review R&D, sponsors and upgrades"
+        else -> "Ready to continue"
+    }
+
+    private fun stopPanel(phase: Phase): String = when (phase) {
+        Phase.PRACTICE, Phase.QUALIFYING, Phase.POST_RACE,
+        Phase.SPRINT, Phase.SPRINT_QUALIFYING, Phase.RACE -> "RACE_WEEKEND"
+        Phase.DRIVER_MARKET -> "MARKET"
+        Phase.PRE_SEASON -> "RD"
+        else -> "DASHBOARD"
     }
 
     fun actions(): ActionsDto {
@@ -1097,5 +1180,12 @@ class GameService(
 
         const val CAR_PERF_BASELINE = 65
         const val CAR_PERF_WEIGHT = 0.4
+
+        /** Hard ceiling on the Continue loop (worst chains are ~4 phases). */
+        const val CONTINUE_MAX_STEPS = 12
+        val CONTINUE_STOP_PHASES = setOf(
+            Phase.PRACTICE, Phase.QUALIFYING, Phase.POST_RACE,
+            Phase.DRIVER_MARKET, Phase.PRE_SEASON,
+        )
     }
 }
