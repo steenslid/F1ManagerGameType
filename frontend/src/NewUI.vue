@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useGame } from './useGame.js'
 import { fmtMoney, phaseLabel, crestText } from './format.js'
 
@@ -21,17 +21,36 @@ import EventFeed from './panels/EventFeed.vue'
 const emit = defineEmits(['open-test-ui'])
 
 const {
-  state, myTeam, hasTeam, advanceLabel, refreshAll, advance,
-  simToNextRace, simToOffSeason,
+  state, myTeam, hasTeam, advanceLabel, refreshAll, advance, continueFlow,
 } = useGame()
 
-const simOpen = ref(false)
-
-async function runSim(which) {
-  simOpen.value = false
-  if (which === 'race') await simToNextRace()
-  else if (which === 'offseason') await simToOffSeason()
+// Backend panel codes -> nav item names.
+const PANEL_MAP = {
+  RACE_WEEKEND: 'Race Weekend',
+  MARKET: 'Market',
+  RD: 'R&D',
+  STAFF: 'Staff',
+  TEAMS: 'Teams',
+  DASHBOARD: 'Dashboard',
 }
+
+// One line under the season bar explaining where Continue stopped.
+const stopNote = ref(null)
+
+// The spine of the loop: play forward to the next thing that needs the
+// player, then land them on the screen that handles it.
+async function onContinue() {
+  stopNote.value = null
+  const res = await continueFlow()
+  if (!res) return
+  stopNote.value = res.reason
+  const target = PANEL_MAP[res.panel]
+  if (target) activePanel.value = target
+}
+
+const requiredCount = computed(
+  () => state.tasks.filter((t) => t.severity === 'REQUIRED').length
+)
 
 const appState = ref('saves') // 'saves' | 'select-team' | 'game'
 const activePanel = ref('Dashboard')
@@ -109,25 +128,26 @@ function handleTeamSelected() {
         <div class="advance">
           <span v-if="state.error" class="err">{{ state.error }}</span>
 
-          <div class="sim-wrap">
-            <button
-              class="btn ghost"
-              :disabled="state.advancing || state.simming"
-              @click="simOpen = !simOpen"
-            >{{ state.simming ? 'Simulating…' : 'Sim ▾' }}</button>
-            <template v-if="simOpen">
-              <div class="sim-backdrop" @click="simOpen = false"></div>
-              <div class="sim-menu">
-                <button @click="runSim('race')">Sim to next race</button>
-                <button @click="runSim('offseason')">Sim to off-season</button>
-              </div>
-            </template>
-          </div>
+          <span
+            v-if="requiredCount"
+            class="tasks-pill"
+            @click="activePanel = 'Dashboard'"
+          >{{ requiredCount }} task{{ requiredCount > 1 ? 's' : '' }} need you</span>
 
-          <button class="btn" :disabled="state.advancing || state.simming" @click="advance">
-            {{ state.advancing ? 'Advancing…' : advanceLabel }}
+          <button class="btn ghost" :disabled="state.advancing || state.simming" @click="advance">
+            {{ state.advancing ? '…' : advanceLabel }}
+          </button>
+
+          <button class="btn" :disabled="state.advancing || state.simming" @click="onContinue">
+            {{ state.simming ? 'Playing…' : 'Continue ▶' }}
           </button>
         </div>
+      </div>
+
+      <!-- Where Continue stopped and why -->
+      <div v-if="stopNote" class="stop-note">
+        <span class="dot"></span>{{ stopNote }}
+        <a class="dismiss" @click="stopNote = null">✕</a>
       </div>
 
       <main class="wrap">
@@ -207,18 +227,18 @@ function handleTeamSelected() {
 .btn:disabled { opacity: .6; cursor: not-allowed; }
 .btn.ghost { background: var(--surface-2); color: var(--fg); border: 1px solid var(--line); }
 .btn.ghost:hover:not(:disabled) { filter: none; border-color: var(--muted); }
-.sim-wrap { position: relative; }
-.sim-backdrop { position: fixed; inset: 0; z-index: 19; }
-.sim-menu {
-  position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; min-width: 180px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
-  box-shadow: 0 10px 30px rgba(0,0,0,.5); overflow: hidden; padding: 4px;
+.tasks-pill {
+  font-size: 11px; font-weight: 700; padding: 5px 11px; border-radius: 20px; cursor: pointer;
+  background: #e0b34122; color: var(--warn); border: 1px solid #e0b34155; white-space: nowrap;
 }
-.sim-menu button {
-  display: block; width: 100%; text-align: left; background: transparent; border: none;
-  color: var(--fg); padding: 9px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;
+.tasks-pill:hover { filter: brightness(1.15); }
+.stop-note {
+  display: flex; align-items: center; gap: 10px; padding: 9px 20px; font-size: 13px;
+  background: var(--accent-soft); border-bottom: 1px solid #e1060033; color: var(--fg);
 }
-.sim-menu button:hover { background: var(--surface-2); }
+.stop-note .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+.stop-note .dismiss { margin-left: auto; color: var(--faint); cursor: pointer; font-size: 12px; }
+.stop-note .dismiss:hover { color: var(--fg); }
 
 .placeholder { text-align: center; padding: 48px; }
 .placeholder h2 { margin: 0 0 8px; }

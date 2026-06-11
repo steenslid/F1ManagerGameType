@@ -26,7 +26,9 @@ const state = reactive({
   currentRace: null,    // CurrentRaceDto | null (null outside a race weekend)
   lastEvents: [],       // raw events from the most recent single advance
   feed: [],             // accumulated, de-noised events for the toast/feed UI
-  simming: false,       // true while a sim-to loop is running
+  simming: false,       // true while a Continue is running
+  tasks: [],            // TaskDto[] — the player's pending checklist
+  lastContinue: null,   // most recent ContinueResultDto (reason/panel)
 })
 
 const RACE_WEEKEND_PHASES = new Set([
@@ -110,6 +112,11 @@ async function refreshAll() {
     state.actions = acts.data?.actions || []
     state.teams = teams.data || []
 
+    // Pending-tasks checklist (non-critical — never block the refresh on it).
+    api.getTasks()
+      .then((res) => { state.tasks = res.data?.tasks || [] })
+      .catch(() => { state.tasks = [] })
+
     // Rebuild the id->name map (teams now; drivers lazily folded in below).
     const map = {}
     for (const t of state.teams) map[t.id] = t.name
@@ -161,59 +168,27 @@ async function advance() {
   }
 }
 
-// Advance repeatedly until `stop(overview)` returns true, or we hit `maxSteps`.
-// Refreshes once at the end (not per step) to keep it fast; events still
-// accumulate in the feed for every step.
-async function simUntil(stop, maxSteps = 120) {
-  if (state.advancing || state.simming) return
+// Smart advance: play forward until the game wants the player's attention
+// (a gated decision, a result, an open market, the pre-season planning
+// window). Returns the backend's ContinueResultDto — `panel` says which
+// screen handles the stop, `reason` is the player-facing line.
+async function continueFlow() {
+  if (state.advancing || state.simming) return null
   state.simming = true
   state.error = null
-  let steps = 0
   try {
-    // Make sure we have a current overview to test against.
-    if (!state.overview) await refreshAll()
-    while (steps < maxSteps) {
-      if (stop(state.overview)) break
-      const data = await advanceOnce()
-      steps++
-      // advanceOnce gives us the new phase/year/round without a full refresh.
-      if (data?.current && state.overview) {
-        state.overview = { ...state.overview, ...data.current }
-      }
-      if (stop(state.overview)) break
-    }
+    const res = await api.continueGame()
+    const data = res.data
+    pushEvents(data?.events || [], data?.current)
+    state.lastContinue = data
+    return data
   } catch (e) {
     state.error = e.message || String(e)
+    return null
   } finally {
     await refreshAll()
     state.simming = false
   }
-  return steps
-}
-
-// Convenience: advance to the start of the next race weekend (PRACTICE).
-function simToNextRace() {
-  const startPhase = state.overview?.phase
-  let moved = false
-  return simUntil((ov) => {
-    if (!ov) return false
-    // Stop once we've entered PRACTICE — but not if we're already sitting in it.
-    if (ov.phase === startPhase && !moved) { moved = true; return false }
-    moved = true
-    return ov.phase === 'PRACTICE'
-  })
-}
-
-// Convenience: advance until the driver market opens (DRIVER_MARKET phase).
-function simToOffSeason() {
-  let moved = false
-  const startPhase = state.overview?.phase
-  return simUntil((ov) => {
-    if (!ov) return false
-    if (ov.phase === startPhase && !moved) { moved = true; return false }
-    moved = true
-    return ov.phase === 'DRIVER_MARKET'
-  })
 }
 
 async function takeControl(teamId) {
@@ -235,9 +210,7 @@ export function useGame() {
     advanceLabel,
     refreshAll,
     advance,
-    simUntil,
-    simToNextRace,
-    simToOffSeason,
+    continueFlow,
     clearFeed,
     takeControl,
   }

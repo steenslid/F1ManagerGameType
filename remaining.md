@@ -253,6 +253,23 @@ the user's repo should now contain all of them:
    free-agent table with per-role hire). Follow-up: AI staff hiring, and
    wiring the Strategist/Crew Chief/Principal into the sim/morale.
 
+33. `game-flow` — the loop becomes guided instead of advance-mashing (no
+   schema change, BREAKING for the old sim buttons). (a) New
+   `POST /api/game/continue` (`GameService.continueFlow`): repeats advance
+   until a stop phase (PRACTICE, QUALIFYING, POST_RACE, DRIVER_MARKET,
+   PRE_SEASON) or a gate refuses (blocked=true, gate message = the next task);
+   returns steps, stop reason, and the panel that handles it. (b) New
+   `GET /api/game/tasks` (`TasksService`): aggregates everything pending —
+   unset focus/strategy (REQUIRED), open seats w/o offers in the market
+   (REQUIRED), vacant staff slots, sponsors expiring this season, zero R&D,
+   the between-rounds lineup window (SUGGESTED) — each with a target panel.
+   (c) UI: season bar's primary button is now **Continue ▶** (auto-navigates
+   to the stopping screen and shows a stop-note strip); single-step Advance
+   demoted to the ghost button; a "N tasks need you" pill links to the
+   Dashboard, whose attention banner is now the full clickable task checklist.
+   Removed: `simUntil`/`simToNextRace`/`simToOffSeason` (broken against the
+   decision gates; superseded by Continue).
+
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further
 recreate is needed — patches 2–14 are all code-only. Schema-per-save means no
