@@ -471,7 +471,7 @@ class SeedLoader {
         ).use { stmt -> stmt.executeUpdate() }
         log.info("  derived: car parts + performance for {} teams", carUpdates)
 
-        // teams.rd_budget — seed each F1 team an R&D spend that roughly sustains
+        // Per-area R&D — seed each F1 team an R&D spend that roughly sustains
         // its starting car, scaled by prestige and ai_development_focus, so the
         // AI grid stays stable across seasons without an explicit AI R&D brain.
         // The player overrides their own via /api/team/rd. Only fill the

@@ -71,13 +71,17 @@ function humanise(message) {
 }
 
 // Some events are noise for a player-facing feed (per-driver age ticks, etc.).
-function isNoise(type) {
-  return type === 'AGE_TICK' || type === 'STAT_DRIFT' || type === 'MARKET_ROUND_RESOLVED'
+// STAT_DRIFT is noise when it's routine decline, but a young driver
+// *developing* is news the player wants.
+function isNoise(type, message) {
+  if (type === 'AGE_TICK' || type === 'MARKET_ROUND_RESOLVED') return true
+  if (type === 'STAT_DRIFT') return !/developing/.test(message || '')
+  return false
 }
 
 function pushEvents(events, ctx) {
   for (const e of events) {
-    if (isNoise(e.type)) continue
+    if (isNoise(e.type, e.message)) continue
     state.feed.unshift({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       type: e.type,

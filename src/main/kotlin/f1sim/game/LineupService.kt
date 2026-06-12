@@ -187,6 +187,9 @@ class LineupService(private val db: Database) {
                 requireIsCallUpEligible(conn, inId)
 
                 // Incoming junior/reserve takes the race seat on a fresh deal.
+                // Drivers arriving without a wage (e.g. a just-promoted F2
+                // champion at salary 0) sign at the market's pace bracket —
+                // a call-up is never free labour.
                 conn.prepareStatement(
                     """
                     UPDATE drivers SET
@@ -195,7 +198,14 @@ class LineupService(private val db: Database) {
                       academy_team_id = NULL,
                       previous_team_id = NULL,
                       contract_expires_year = ?,
-                      contract_expires_round = ?
+                      contract_expires_round = ?,
+                      current_salary = CASE
+                          WHEN current_salary > 0 THEN current_salary
+                          WHEN stat_pace >= 90 THEN 20000000
+                          WHEN stat_pace >= 80 THEN 8000000
+                          WHEN stat_pace >= 70 THEN 2000000
+                          ELSE 500000
+                      END
                      WHERE id = ?
                     """.trimIndent()
                 ).use { stmt ->

@@ -145,7 +145,6 @@ CREATE TABLE teams (
     heritage_payment                BIGINT       NOT NULL DEFAULT 0,
     base_operating_cost             BIGINT       NOT NULL DEFAULT 0,
     academy_investment              BIGINT       NOT NULL DEFAULT 0,
-    rd_budget                       BIGINT       NOT NULL DEFAULT 0,
     cap_compliance_status           TEXT         NOT NULL DEFAULT 'COMPLIANT',
 
     regulation_understanding        NUMERIC(3,2) NOT NULL DEFAULT 0.50,
