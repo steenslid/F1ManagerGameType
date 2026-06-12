@@ -180,7 +180,7 @@ the user's repo should now contain all of them:
    but slower; DEVELOPMENT_FEEDBACK qualifying-trim (+quali, −consistency, so a
    riskier race). consistencyDelta shifts both race variance and the DNF roll.
    RaceWeekendPanel labels/hint describe the trade-offs. (Main race + both
-   qualifying sessions use focus; the sprint *race* pace doesn't read focus.)
+   qualifying sessions use focus; the sprint race reads focus too as of patch 34.)
 24. `driver-growth` — young drivers now develop (no schema change). In the
    OFF_SEASON aging tick, a driver at/under `trait_peak_age` with
    `development_pool` left gains pace + qualifying toward `DRIVER_GROWTH_CAP`
@@ -269,6 +269,17 @@ the user's repo should now contain all of them:
    Dashboard, whose attention banner is now the full clickable task checklist.
    Removed: `simUntil`/`simToNextRace`/`simToOffSeason` (broken against the
    decision gates; superseded by Continue).
+34. `flow-fixes` — a medium pass of fixes + two staff effects. BREAKING SCHEMA
+   (dropped the dead `teams.rd_budget` column, superseded by the per-area
+   budgets). Fixes: the **sprint race now reads practice focus** (was main-race
+   only); a mid-season call-up of a 0-salary driver (e.g. a fresh F2 champion)
+   now **signs at the market pace bracket** instead of being free labour.
+   Gameplay: **Crew Chief** now sharpens `pit_crew_rating` into a small race
+   pace term (so the pit-crew stat finally matters), and a strong **Chief
+   Strategist** (skill ≥ 75) steadies race execution (+5 effective consistency).
+   Flow: per-screen **nav badges** show each panel's pending-task count, and
+   young-driver **development** events now surface in the feed (routine decline
+   stays filtered). No code still references `rd_budget`.
 
 **Schema state.** The only schema change in this chain was `previous_team_id`
 (patch 1). If the user already recreated saves after that, no further

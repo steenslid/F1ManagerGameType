@@ -52,6 +52,16 @@ const requiredCount = computed(
   () => state.tasks.filter((t) => t.severity === 'REQUIRED').length
 )
 
+// Pending-task count per nav item, so screens with work show a badge.
+const navBadges = computed(() => {
+  const counts = {}
+  for (const t of state.tasks) {
+    const name = PANEL_MAP[t.panel]
+    if (name) counts[name] = (counts[name] || 0) + 1
+  }
+  return counts
+})
+
 const appState = ref('saves') // 'saves' | 'select-team' | 'game'
 const activePanel = ref('Dashboard')
 
@@ -90,7 +100,7 @@ function handleTeamSelected() {
           :key="item"
           :class="{ active: activePanel === item }"
           @click="activePanel = item"
-        >{{ item }}</a>
+        >{{ item }}<span v-if="navBadges[item]" class="nav-badge">{{ navBadges[item] }}</span></a>
         <a
           v-for="item in stubItems"
           :key="item"
@@ -192,6 +202,11 @@ function handleTeamSelected() {
 .nav a.ext { color: var(--muted); }
 .nav a.ext:hover { color: #fff; }
 .nav a.faint { color: var(--faint); }
+.nav-badge {
+  display: inline-grid; place-items: center; min-width: 15px; height: 15px;
+  margin-left: 5px; padding: 0 4px; border-radius: 8px; font-size: 9px; font-weight: 800;
+  background: var(--accent); color: #fff; vertical-align: 1px;
+}
 
 /* Season-control bar */
 .topbar {

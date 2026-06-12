@@ -678,12 +678,24 @@ class GameService(
             """
             SELECT rr.driver_id, rr.team_id, rr.grid_position,
                    d.stat_pace, d.stat_consistency,
-                   t.car_aero, t.car_chassis, t.car_powertrain,
+                   t.car_aero, t.car_chassis, t.car_powertrain, t.pit_crew_rating,
+                   COALESCE(cc.skill, 50) AS crew_chief_skill,
+                   COALESCE(cs.skill, 50) AS strategist_skill,
                    pf.focus AS focus,
                    rs.archetype AS strategy_archetype
               FROM race_results rr
               JOIN drivers d ON d.id = rr.driver_id
               JOIN teams t ON t.id = rr.team_id
+              LEFT JOIN (
+                  SELECT current_team_id, MAX(skill_crew_management) AS skill
+                    FROM personnel WHERE NOT retired AND role = 'CREW_CHIEF'
+                   GROUP BY current_team_id
+              ) cc ON cc.current_team_id = rr.team_id
+              LEFT JOIN (
+                  SELECT current_team_id, MAX(skill_strategy) AS skill
+                    FROM personnel WHERE NOT retired AND role = 'CHIEF_STRATEGIST'
+                   GROUP BY current_team_id
+              ) cs ON cs.current_team_id = rr.team_id
               LEFT JOIN practice_focus pf
                 ON pf.driver_id = rr.driver_id AND pf.race_id = rr.race_id
               LEFT JOIN race_strategy rs
@@ -699,9 +711,21 @@ class GameService(
                         val basePace = rs.getInt("stat_pace").toDouble()
                         val fx = focusEffect(rs.getString("focus"))
                         val car = weightedCar(rs.getInt("car_aero"), rs.getInt("car_chassis"), rs.getInt("car_powertrain"), weights)
-                        val effectivePace = basePace * fx.paceMult + carTerm(car)
+                        // Pit-stop execution: pit crew, sharpened (or dulled)
+                        // by the Crew Chief. Small relative term, race only —
+                        // sprints have no stops.
+                        val effectivePitCrew = rs.getInt("pit_crew_rating") +
+                            (rs.getInt("crew_chief_skill") - 50) * CREW_CHIEF_WEIGHT
+                        val pitTerm = (effectivePitCrew - PIT_CREW_BASELINE) * PIT_CREW_WEIGHT
+                        val effectivePace = basePace * fx.paceMult + carTerm(car) + pitTerm
+                        // A top Chief Strategist executes the race plan more
+                        // cleanly: steadier stint variance + fewer disasters.
+                        val strategistBonus =
+                            if (rs.getInt("strategist_skill") >= STRATEGIST_SKILL_FLOOR)
+                                STRATEGIST_CONSISTENCY_BONUS else 0
                         val effectiveConsistency =
-                            (rs.getInt("stat_consistency") + fx.consistencyDelta).coerceIn(1, 100)
+                            (rs.getInt("stat_consistency") + fx.consistencyDelta + strategistBonus)
+                                .coerceIn(1, 100)
                         add(
                             RaceSim.RaceEntrant(
                                 driverId = rs.getObject("driver_id", UUID::class.java),
@@ -840,10 +864,13 @@ class GameService(
             """
             SELECT sr.driver_id, sr.team_id, sr.grid_position,
                    d.stat_pace, d.stat_consistency,
-                   t.car_aero, t.car_chassis, t.car_powertrain
+                   t.car_aero, t.car_chassis, t.car_powertrain,
+                   pf.focus AS focus
               FROM sprint_results sr
               JOIN drivers d ON d.id = sr.driver_id
               JOIN teams t ON t.id = sr.team_id
+              LEFT JOIN practice_focus pf
+                ON pf.driver_id = sr.driver_id AND pf.race_id = sr.race_id
              WHERE sr.race_id = ?
                AND sr.status = 'QUALIFIED'
             """.trimIndent()
@@ -852,14 +879,18 @@ class GameService(
             stmt.executeQuery().use { rs ->
                 buildList {
                     while (rs.next()) {
+                        // The weekend's setup (practice focus) applies to the
+                        // sprint too — same trade-offs as the main race. No
+                        // pit/strategist terms: sprints have no stops.
+                        val fx = focusEffect(rs.getString("focus"))
                         add(
                             RaceSim.SprintEntrant(
                                 driverId = rs.getObject("driver_id", UUID::class.java),
                                 teamId = rs.getString("team_id"),
                                 gridPosition = rs.getInt("grid_position"),
-                                statPace = rs.getInt("stat_pace").toDouble() +
+                                statPace = rs.getInt("stat_pace").toDouble() * fx.paceMult +
                                     carTerm(weightedCar(rs.getInt("car_aero"), rs.getInt("car_chassis"), rs.getInt("car_powertrain"), weights)),
-                                statConsistency = rs.getInt("stat_consistency"),
+                                statConsistency = (rs.getInt("stat_consistency") + fx.consistencyDelta).coerceIn(1, 100),
                             )
                         )
                     }
@@ -1180,6 +1211,16 @@ class GameService(
 
         const val CAR_PERF_BASELINE = 65
         const val CAR_PERF_WEIGHT = 0.4
+
+        // Pit-stop execution (race only): pit_crew_rating sharpened by the
+        // Crew Chief's crew-management skill. With ratings ~42..85 the swing
+        // is ~±1..2 pace — a tiebreaker, never a car/driver substitute.
+        const val PIT_CREW_BASELINE = 65
+        const val PIT_CREW_WEIGHT = 0.05
+        const val CREW_CHIEF_WEIGHT = 0.3
+        /** Strategist skill at/above which race execution steadies. */
+        const val STRATEGIST_SKILL_FLOOR = 75
+        const val STRATEGIST_CONSISTENCY_BONUS = 5
 
         /** Hard ceiling on the Continue loop (worst chains are ~4 phases). */
         const val CONTINUE_MAX_STEPS = 12
